@@ -86,6 +86,21 @@ places them in the current folder by default.
 bibadac download mybib.bib
 ```
 
+## Installation
+
+The tool is not yet available on `crates.io`, but you can install it from the
+source code. You will need to have `rust` installed on your computer. You can
+install it by running the following command:
+
+```bash
+cargo install --git
+```
+
+This will install the `bibadac` binary in your `~/.cargo/bin` folder. Make sure
+that this folder is in your `PATH` environment variable, or move the binary to
+a folder that is in your `PATH`.
+
+
 ## Configuration 
 
 You may want to configure the tool to your needs. Typically, 
@@ -101,12 +116,6 @@ there are several things that you may want to change:
 This can be done directly using command line options, or by creating
 a configuration file in the current directory call `bibadac.toml`.
 
-### Specific linting rules
-
-### Specific formatting rules
-
-### Bibtex Sources 
-
-### Pdf Sources
+This part of the documentation is not yet written.
 
 [BibTeX]: https://en.wikipedia.org/wiki/BibTeX
