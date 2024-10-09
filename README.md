@@ -55,7 +55,7 @@ bibadac check mybib.bib
 
 This will print a report of the `mybib.bib` file, with all the errors and
 warnings that were found. The exit code will be 0 if no error was found, 1 for
-errors, and 2 in case of internal errors.
+errors, and 101 in case of internal errors.
 
 It is possible to ask the program to generate a report in a different format
 and to specify an output file instead of printing it to the standard output.
@@ -79,12 +79,16 @@ bibadac format mybib.bib --output mybib_formatted.bib
 ```
 
 Finally, it is possible to ask the tool to download all the PDFs of the papers
-cited in the BibTeX file. This is done with the following command, which 
-places them in the current folder by default.
+cited in the BibTeX file. This is done with the following command, which places
+them in the current folder by default. The command is called `setup` because it
+"sets up" the reading environment, and depending on the options, it can only
+use documents that you already have on your computer (avoiding using an
+internet connection).
 
 ```bash
-bibadac download mybib.bib
+bibadac setup mybib.bib
 ```
+
 
 ## Installation
 
