@@ -9,8 +9,9 @@
 //
 // 4 - Use a caching mechanism to avoid downloading the same file
 // twice.
+//
 use crate::arxiv_identifiers::ArxivId;
-use reqwest::blocking::Client;
+//use reqwest::blocking::Client;
 use std::collections::HashMap;
 
 pub struct SetupState {
