@@ -323,6 +323,26 @@ fn main() {
                 }
             }
 
+            // if there is an "output bibfile", we first open this 
+            // file to check if some dois already have been downloaded
+            // and we remove them from the list of dois to download
+            if let Some(path) = &cargs.to_file {
+                let start_bib = std::fs::read_to_string(path).unwrap();
+                let bibtex = BibFile::new(&start_bib);
+                for entry in bibtex.list_entries() {
+                    for field in entry.fields.iter() {
+                        let key = bibtex.get_slice(field.name);
+                        let value = bibtex.get_braceless_slice(field.value);
+                        match key {
+                            "doi" => {
+                                dois.remove(value);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
             let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_io()
                         .enable_time()
@@ -355,7 +375,13 @@ fn main() {
                 }
                 if let Some(path) = cargs.to_file {
                     use std::io::Write;
-                    let mut out = std::fs::File::create(path).unwrap();
+                    // we append to the file and create the file if it 
+                    // does not exist
+                    let mut out = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
                     for s in res.iter() {
                         if let Some(s) = s {
                             writeln!(out, "{}", s).unwrap();
