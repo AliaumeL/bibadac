@@ -312,6 +312,7 @@ fn main() {
                                 dois.insert(value.to_string());
                             }
                             "eprint" => {
+                                // FIXME: insert both the eprint and its "canonical" form
                                 eprints.insert(value.to_string());
                             }
                             "sha256" => {

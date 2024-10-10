@@ -20,6 +20,7 @@ pub enum DownloadRequest<'a> {
     Url(&'a str),
 }
 
+#[allow(async_fn_in_trait)]
 pub trait DownloadHandler<T : Fn(&str) -> ()> {
     fn can_handle(&self, request: &DownloadRequest) -> bool;
     async fn download<'a>(&self, request: &[DownloadRequest<'a>], progress: T) -> Vec<Option<String>>;
