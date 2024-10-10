@@ -40,9 +40,9 @@ enum SubCommand {
 
 #[derive(Debug, Clone, Args)]
 struct FileArgs {
-    #[arg(short, long)]
+    #[arg(short, long, help="BibTeX/BibLaTeX files to read")]
     bib: Vec<std::path::PathBuf>,
-    #[arg(short, long)]
+    #[arg(short, long, help="Read BibTeX from stdin")]
     stdin: bool,
 }
 
@@ -50,11 +50,11 @@ struct FileArgs {
 struct CheckArgs {
     #[clap(flatten)]
     files: FileArgs,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Be pedantic and show all errors")]
     pedantic: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Show location of the errors")]
     verbose: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Output the errors in JSON format")]
     to_json: bool,
 }
 
@@ -63,9 +63,11 @@ struct CheckArgs {
 struct FormatArgs {
     #[clap(flatten)]
     files: FileArgs, 
-    #[arg(short, long)]
+    #[arg(short, long, help = "Create a new file with the formatted content")]
+    to_file: bool,
+    #[arg(short, long, help = "Update the files *in place* (dangerous)")]
     in_place: bool,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Autocomplete entries using an existing bibfile")]
     file_db: Option<std::path::PathBuf>,
 }
 
@@ -242,14 +244,18 @@ fn main() {
             }
         }
         SubCommand::Format(cargs) => {
-            let start_bib = std::fs::read_to_string("/Users/aliaume/Documents/transducer-bib/polyregular.bib").unwrap();
+            let mut db = LocalBibDb::new();
+            if let Some(path) = cargs.file_db {
+                let start_bib = std::fs::read_to_string(path).unwrap();
+                db = db.import_bibtex(&start_bib);
+            }
+
             let inputs = cargs.files.list_files();
-            let mut db = LocalBibDb::new().import_bibtex(&start_bib);
 
             let mut format_options = FormatOptions::new(&mut db);
             format_options.sort_entries = true;
 
-            let mut out = std::io::stdout();
+            let mut stdout = std::io::stdout();
             
             for bib in inputs {
                 let bibtex = BibFile::new(&bib.content);
@@ -264,7 +270,17 @@ fn main() {
                             .unwrap_or(0)
                     }).max().unwrap_or(0);
                 format_options.min_field_length = Some(max_field_length);
-                write_bibfile(&bibtex, &format_options, &mut out);
+                if cargs.to_file {
+                    let newpath = bib.name.with_extension("new.bib");
+                    let mut out = std::fs::File::create(newpath).unwrap();
+                    write_bibfile(&bibtex, &format_options, &mut out);
+                } else if cargs.in_place {
+                    let mut out = std::fs::File::create(&bib.name).unwrap();
+                    write_bibfile(&bibtex, &format_options, &mut out);
+                } else {
+                    write_bibfile(&bibtex, &format_options, &mut stdout);
+                }
+
             }
         }
         SubCommand::Setup(cargs) => {
