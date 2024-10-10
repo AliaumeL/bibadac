@@ -115,6 +115,15 @@ impl<'a> BibFile<'a> {
         &self.content[start..end]
     }
 
+    pub fn get_braceless_slice(&self, node: Node) -> &'a str {
+        let slice = self.get_slice(node);
+        if slice.starts_with('{') && slice.ends_with('}') {
+            &slice[1..slice.len() - 1]
+        } else {
+            slice
+        }
+    }
+
     pub fn list_entries(&self) -> impl Iterator<Item = BibEntry> {
         // General shape
         // (document (entry ty: (entry_type) key: (key_brace) field: (field name: (identifier) value: (value (token (brace_word)))) field: (field name: (identifier) value: (value (token (brace_word))))) ...)

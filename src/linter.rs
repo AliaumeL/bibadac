@@ -39,6 +39,8 @@
 ///
 use std::collections::{HashMap, HashSet};
 
+use serde::{Serialize, Deserialize};
+
 //use crate::arxiv_identifiers::ArxivId;
 use crate::author_format::check_authors;
 use crate::bibtex::{BibEntry, BibFile};
@@ -52,7 +54,7 @@ pub struct LinterState<'a> {
     pub arxiv_doi: HashMap<&'a str, &'a str>,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone,Serialize,Deserialize)]
 pub enum LintMessage {
     SyntaxError(String),
     EmptyKey,
@@ -76,7 +78,7 @@ impl LintMessage {
         match self {
             LintMessage::SyntaxError(_) => true,
             LintMessage::EmptyKey => true,
-            LintMessage::WeirdCharacters(_) => true,
+            LintMessage::WeirdCharacters(_) => false,
             LintMessage::AuthorFormat => false,
             LintMessage::ArxivAsDoi => false,
             LintMessage::HttpDoi => false,
@@ -85,7 +87,7 @@ impl LintMessage {
             LintMessage::MissingOptionalField(_) => false,
             LintMessage::DuplicateFieldName(_) => true,
             LintMessage::DuplicateKey(_) => true,
-            LintMessage::DuplicateDoiArxivSha256(_, _, _) => false,
+            LintMessage::DuplicateDoiArxivSha256(_, _, _) => true,
             LintMessage::OutdatedEntry => false,
             LintMessage::PublishedEquivalent => false,
             LintMessage::RevokedEntry => false,
@@ -134,7 +136,7 @@ impl<'a> LinterState<'a> {
         let fields = entry
             .fields
             .iter()
-            .map(|field| (file.get_slice(field.name), file.get_slice(field.value)))
+            .map(|field| (file.get_slice(field.name), file.get_braceless_slice(field.value)))
             .collect::<HashMap<_, _>>();
         for f in ["author", "title", "year"].iter() {
             if !fields.contains_key(f) {
@@ -180,7 +182,7 @@ impl<'a> LinterState<'a> {
         }
         messages.extend(entry.fields.iter().filter_map(|f| {
             let keystr = file.get_slice(f.name);
-            let valuestr = file.get_slice(f.value);
+            let valuestr = file.get_braceless_slice(f.value);
             let msg = self.lint_field(keystr, valuestr)?;
             Some(Lint {
                 msg,
@@ -214,7 +216,7 @@ impl<'a> LinterState<'a> {
             let fields = entry
                 .fields
                 .iter()
-                .map(|field| (file.get_slice(field.name), file.get_slice(field.value)))
+                .map(|field| (file.get_slice(field.name), file.get_braceless_slice(field.value)))
                 .collect::<HashMap<_, _>>();
             let key = file.get_slice(entry.key);
             let doi = fields.get("doi").map(|s| *s).unwrap_or("");
@@ -225,7 +227,7 @@ impl<'a> LinterState<'a> {
                 .or_default()
                 .push(entry.loc);
 
-            used_keys.entry(key).or_insert(vec![]).push(entry.key);
+            used_keys.entry(key).or_insert(vec![]).push(entry.loc);
             messages.extend(self.lint_entry(file, entry));
         }
 
@@ -240,7 +242,7 @@ impl<'a> LinterState<'a> {
 
         // 3. check for duplicate entries (same DOI/ARXIV/SHA256 pair)
         for ((doi, arxiv, sha), entries) in doi_arxiv_sha256.into_iter() {
-            if !doi.is_empty() && !arxiv.is_empty() && !sha.is_empty() && entries.len() > 1 {
+            if !(doi.is_empty() && arxiv.is_empty() && sha.is_empty()) && entries.len() > 1 {
                 messages.push(Lint {
                     msg: LintMessage::DuplicateDoiArxivSha256(
                     doi.into(),

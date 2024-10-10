@@ -11,14 +11,7 @@
 // twice.
 //
 use crate::arxiv_identifiers::ArxivId;
-//use reqwest::blocking::Client;
-use std::collections::HashMap;
-
-pub struct SetupState {
-    // The download url of the PDF
-    // and the hash of the corresponding file
-    pub cache: HashMap<String, String>,
-}
+use reqwest::blocking::Client;
 
 pub enum DownloadRequest<'a> {
     Arxiv(ArxivId<'a>),
@@ -42,10 +35,25 @@ impl DownloadHandler for ArxivDownloader {
     }
 
     fn download(&self, request: &[DownloadRequest]) -> Vec<Option<String>> {
+        let client = Client::new();
         request
             .iter()
             .map(|r| match r {
-                DownloadRequest::Arxiv(id) => Some(id.to_pdf_url()),
+                DownloadRequest::Arxiv(id) => {
+                    eprintln!("Downloading arxiv paper {}", id);
+                    let url = id.to_pdf_url();
+                    eprintln!("URL: {}", url);
+                    let response = client.get(url).send();
+                    eprintln!("Response: {:?}", response);
+                    match response {
+                        Ok(mut response) => {
+                            let mut buf = Vec::new();
+                            response.copy_to(&mut buf).ok()?;
+                            Some(String::from_utf8(buf).ok()?)
+                        }
+                        Err(_) => None,
+                    }
+                }
                 _ => None,
             })
             .collect()
