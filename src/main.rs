@@ -16,6 +16,8 @@ use bibadac::bibtex::BibFile;
 use bibadac::format::{write_bibfile, FormatOptions};
 use bibadac::linter::{LintMessage, LinterState};
 
+use std::collections::HashSet;
+
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Parser)]
@@ -75,6 +77,16 @@ struct FormatArgs {
 struct SetupArgs {
     #[clap(flatten)]
     files: FileArgs,
+    #[arg(short, long, help = "Save bibentries to a file")]
+    to_file: Option<std::path::PathBuf>,
+    #[arg(short, long, help = "Print the bibentries")]
+    output: bool,
+    #[arg(short, long, help = "Download the pdfs")]
+    documents: bool,
+    #[arg(short, long, help = "Directory to save the pdfs")]
+    working_directory: Option<std::path::PathBuf>,
+    #[arg(short, long, help = "Show progress of the downloads")]
+    progress: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -133,7 +145,6 @@ struct JsonReportLint {
     msg: LintMessage,
     loc: Vec<JsonReportLoc>,
 }
-
 
 fn main() {
     let args = Cli::parse();
@@ -284,22 +295,74 @@ fn main() {
             }
         }
         SubCommand::Setup(cargs) => {
-            use bibadac::setup::{DownloadHandler, DownloadRequest, ArxivDownloader};
+            use bibadac::setup::{DownloadHandler, DownloadRequest};
             let files = cargs.files.list_files();
-            let downloader = ArxivDownloader {};
+            let downloader = bibadac::setup::DxDoiDownloader::default();
+            let mut dois    : HashSet<String> = HashSet::new();
+            let mut eprints : HashSet<String> = HashSet::new();
+            let mut sha256s : HashSet<String> = HashSet::new();
             for bib in files {
                 let bibtex = BibFile::new(&bib.content);
-                let eprints = bibtex.list_entries().filter_map(|entry| {
-                    entry.fields.iter()
-                         .find(|f| bibtex.get_slice(f.name) == "eprint")
-                         .map(|f| bibtex.get_slice(f.value))
-                         .map(|s| &s[1..s.len()-1])
-                         .and_then(|f| {
-                             Some(DownloadRequest::Arxiv(bibadac::arxiv_identifiers::ArxivId::try_from(f).ok()?))
-                         })
-                }).collect::<Vec<_>>();
-                downloader.download(&eprints);
+                for entry in bibtex.list_entries() {
+                    for field in entry.fields.iter() {
+                        let key = bibtex.get_slice(field.name);
+                        let value = bibtex.get_braceless_slice(field.value);
+                        match key {
+                            "doi" => {
+                                dois.insert(value.to_string());
+                            }
+                            "eprint" => {
+                                eprints.insert(value.to_string());
+                            }
+                            "sha256" => {
+                                sha256s.insert(value.to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_io()
+                        .enable_time()
+                        .build()
+                        .unwrap();
+
+            let doi_requests : Vec<_> = 
+                dois.iter().map(|d| DownloadRequest::Doi(d)).collect();
+
+            if cargs.progress {
+                println!("{} {} dois", "[TOTAL]".blue(), dois.len());
+            }
+            rt.block_on(async { 
+                let res = downloader.download(&doi_requests, |url| {
+                    if cargs.progress {
+                        println!("{} {}", "[Downloading]".green(), url);
+                    }
+                }).await;
+                let mut count = 0;
+                for r in res.iter() {
+                    if let Some(s) = r {
+                        if cargs.output {
+                            println!("{}", s);
+                        }
+                        count += 1;
+                    }
+                }
+                if cargs.progress {
+                    println!("{} {} / {}", "[TOTAL]".blue(), count, dois.len());
+                }
+                if let Some(path) = cargs.to_file {
+                    use std::io::Write;
+                    let mut out = std::fs::File::create(path).unwrap();
+                    for s in res.iter() {
+                        if let Some(s) = s {
+                            writeln!(out, "{}", s).unwrap();
+                        }
+                    }
+                }
+            });
         }
     }
 }

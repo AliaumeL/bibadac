@@ -11,22 +11,129 @@
 // twice.
 //
 use crate::arxiv_identifiers::ArxivId;
-use reqwest::blocking::Client;
+use reqwest::Client;
 
+#[derive(Debug)]
 pub enum DownloadRequest<'a> {
     Arxiv(ArxivId<'a>),
     Doi(&'a str),
     Url(&'a str),
 }
 
-pub trait DownloadHandler {
+pub trait DownloadHandler<T : Fn(&str) -> ()> {
     fn can_handle(&self, request: &DownloadRequest) -> bool;
-    fn download(&self, request: &[DownloadRequest]) -> Vec<Option<String>>;
+    async fn download<'a>(&self, request: &[DownloadRequest<'a>], progress: T) -> Vec<Option<String>>;
 }
 
-pub struct ArxivDownloader {}
+#[derive(Default)]
+pub struct ArxivDownloader  {
+    client: Client
+}
 
-impl DownloadHandler for ArxivDownloader {
+pub struct DxDoiDownloader  {
+    client: Client
+}
+
+impl Default for DxDoiDownloader {
+    fn default() -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "Accept",
+            reqwest::header::HeaderValue::from_static("application/x-bibtex"),
+        );
+        headers.insert(
+            "Mailto",
+            reqwest::header::HeaderValue::from_static("ad.lopez@uw.edu.pl")
+            );
+
+        let client = reqwest::Client::builder()
+            .user_agent(concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .default_headers(headers)
+            .build().expect("Could not build http client");
+
+        DxDoiDownloader { client }
+    }
+}
+
+
+#[derive(Default)]
+pub struct ScihubDownloader {
+    client: Client
+}
+
+
+impl DxDoiDownloader {
+    pub fn new() -> Self {
+        DxDoiDownloader::default()
+    }
+
+    async fn download_one<'a>(&self, request: &DownloadRequest<'a>) -> Option<String> {
+        if let DownloadRequest::Doi(doi) = request {
+            let url = format!("https://dx.doi.org/{}", doi);
+            let response = self.client.get(url).send().await.ok()?;
+            let text     = response.text_with_charset("utf-8").await.ok()?;
+            if text.starts_with(" @") {
+                Some(text)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl ArxivDownloader {
+    fn new() -> Self {
+        ArxivDownloader::default()
+    }
+
+    async fn download_one<'a>(&self, request: &DownloadRequest<'a>) -> Option<String> {
+        if let DownloadRequest::Arxiv(id) = request {
+            eprintln!("Downloading arxiv paper {}", id);
+            let url = id.to_pdf_url();
+            eprintln!("URL: {}", url);
+            let response = self.client.get(url).send().await.ok()?;
+            eprintln!("Response: {:?}", response);
+            let _ = response.bytes().await.ok()?;
+            Some("<PDF DATA>".to_string())
+        } else {
+            None
+        }
+    }
+}
+
+impl<T> DownloadHandler<T> for DxDoiDownloader
+where T : Fn(&str) -> ()
+{
+    fn can_handle(&self, request: &DownloadRequest) -> bool {
+        match request {
+            DownloadRequest::Doi(_) => true,
+            _ => false,
+        }
+    }
+
+    async fn download<'a>(&self, request: &[DownloadRequest<'a>], progress: T) -> Vec<Option<String>> {
+        use futures::stream::{self, StreamExt};
+        let res = stream::iter(request
+            .iter()
+            .map(|r| { progress(&format!("{:?}", r)); self.download_one(r) }))
+            .buffer_unordered(5)
+            .collect()
+            .await;
+
+        res
+    }
+
+}
+
+impl<T> DownloadHandler<T> for ArxivDownloader
+where T : Fn(&str) -> ()
+{
     fn can_handle(&self, request: &DownloadRequest) -> bool {
         match request {
             DownloadRequest::Arxiv(_) => true,
@@ -34,28 +141,14 @@ impl DownloadHandler for ArxivDownloader {
         }
     }
 
-    fn download(&self, request: &[DownloadRequest]) -> Vec<Option<String>> {
-        let client = Client::new();
-        request
+    async fn download<'a>(&self, request: &[DownloadRequest<'a>], progress: T) -> Vec<Option<String>> {
+        use futures::stream::{self, StreamExt};
+        let res = stream::iter(request
             .iter()
-            .map(|r| match r {
-                DownloadRequest::Arxiv(id) => {
-                    eprintln!("Downloading arxiv paper {}", id);
-                    let url = id.to_pdf_url();
-                    eprintln!("URL: {}", url);
-                    let response = client.get(url).send();
-                    eprintln!("Response: {:?}", response);
-                    match response {
-                        Ok(mut response) => {
-                            let mut buf = Vec::new();
-                            response.copy_to(&mut buf).ok()?;
-                            Some(String::from_utf8(buf).ok()?)
-                        }
-                        Err(_) => None,
-                    }
-                }
-                _ => None,
-            })
+            .map(|r| { progress(&format!("{:?}", r)); self.download_one(r) }))
+            .buffer_unordered(5)
             .collect()
+            .await;
+        res
     }
 }
