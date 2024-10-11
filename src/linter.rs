@@ -39,13 +39,12 @@
 ///
 use std::collections::{HashMap, HashSet};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-//use crate::arxiv_identifiers::ArxivId;
 use crate::author_format::check_authors;
+use crate::bibtex::tree_sitter::Node;
 use crate::bibtex::{BibEntry, BibFile};
 use std::fmt::{self, Debug, Formatter};
-use tree_sitter::Node;
 
 pub struct LinterState<'a> {
     pub revoked_dois: HashSet<&'a str>,
@@ -54,7 +53,7 @@ pub struct LinterState<'a> {
     pub arxiv_doi: HashMap<&'a str, &'a str>,
 }
 
-#[derive(Debug,Clone,Serialize,Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LintMessage {
     SyntaxError(String),
     EmptyKey,
@@ -125,7 +124,11 @@ impl<'a> LinterState<'a> {
             return Some(LintMessage::RevokedEntry);
         }
         // we allow "{", "}", and ","
-        if key != "doi" && key != "eprint" && key != "url" && value.contains(|c: char| c != '\n' && (c.is_control() || c == '\\')) {
+        if key != "doi"
+            && key != "eprint"
+            && key != "url"
+            && value.contains(|c: char| c != '\n' && (c.is_control() || c == '\\'))
+        {
             return Some(LintMessage::WeirdCharacters(value.to_string()));
         }
         None
@@ -136,7 +139,12 @@ impl<'a> LinterState<'a> {
         let fields = entry
             .fields
             .iter()
-            .map(|field| (file.get_slice(field.name), file.get_braceless_slice(field.value)))
+            .map(|field| {
+                (
+                    file.get_slice(field.name),
+                    file.get_braceless_slice(field.value),
+                )
+            })
             .collect::<HashMap<_, _>>();
         for f in ["author", "title", "year"].iter() {
             if !fields.contains_key(f) {
@@ -163,7 +171,7 @@ impl<'a> LinterState<'a> {
         {
             messages.push(Lint {
                 msg: LintMessage::UncheckableEntry,
-                loc: vec![entry.loc]
+                loc: vec![entry.loc],
             });
         }
 
@@ -176,7 +184,7 @@ impl<'a> LinterState<'a> {
             if locs.len() > 1 {
                 messages.push(Lint {
                     msg: LintMessage::DuplicateFieldName(k.to_string()),
-                    loc: locs
+                    loc: locs,
                 });
             }
         }
@@ -186,7 +194,7 @@ impl<'a> LinterState<'a> {
             let msg = self.lint_field(keystr, valuestr)?;
             Some(Lint {
                 msg,
-                loc: vec![f.loc]
+                loc: vec![f.loc],
             })
         }));
 
@@ -195,7 +203,7 @@ impl<'a> LinterState<'a> {
 
     pub fn lint_file(&self, file: &'a BibFile<'a>, entries: Vec<BibEntry<'a>>) -> Vec<Lint<'a>> {
         let mut messages = vec![];
-        let mut used_keys : HashMap<&str, Vec<Node<'a>>> = HashMap::new();
+        let mut used_keys: HashMap<&str, Vec<Node<'a>>> = HashMap::new();
         let mut doi_arxiv_sha256: HashMap<(&'a str, &'a str, &'a str), Vec<Node<'a>>> =
             HashMap::new();
 
@@ -216,7 +224,12 @@ impl<'a> LinterState<'a> {
             let fields = entry
                 .fields
                 .iter()
-                .map(|field| (file.get_slice(field.name), file.get_braceless_slice(field.value)))
+                .map(|field| {
+                    (
+                        file.get_slice(field.name),
+                        file.get_braceless_slice(field.value),
+                    )
+                })
                 .collect::<HashMap<_, _>>();
             let key = file.get_slice(entry.key);
             let doi = fields.get("doi").map(|s| *s).unwrap_or("");
@@ -235,7 +248,7 @@ impl<'a> LinterState<'a> {
             if locs.len() > 1 {
                 messages.push(Lint {
                     msg: LintMessage::DuplicateKey(key.to_string()),
-                    loc: locs
+                    loc: locs,
                 });
             }
         }
@@ -244,10 +257,7 @@ impl<'a> LinterState<'a> {
         for ((doi, arxiv, sha), entries) in doi_arxiv_sha256.into_iter() {
             if !(doi.is_empty() && arxiv.is_empty() && sha.is_empty()) && entries.len() > 1 {
                 messages.push(Lint {
-                    msg: LintMessage::DuplicateDoiArxivSha256(
-                    doi.into(),
-                    arxiv.into(),
-                    sha.into()),
+                    msg: LintMessage::DuplicateDoiArxivSha256(doi.into(), arxiv.into(), sha.into()),
                     loc: entries,
                 });
             }
@@ -257,11 +267,11 @@ impl<'a> LinterState<'a> {
         // several versions of the same paper)
         // - if the entry refers to a *doi/url* and also an arxiv version, then it *SHOULD NOT* be
         // pinned
-    
+
         // a. take all arxiv entries, remove those that have a DOI associated
         //    (print an error if the arxiv version is not pinned)
         // b. check if the arxiv version is outdated for the rest of the entries
-        
+
         // 5. published equivalents (arxiv -> doi / doi -> arxiv)
         // TODO.
 
