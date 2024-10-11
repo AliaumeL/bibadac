@@ -3,6 +3,7 @@
 /// and provides nice APIs to interact with
 /// such files.
 use once_cell::sync::OnceCell;
+pub use tree_sitter;
 use tree_sitter::{Language, Node, Parser, Tree, TreeCursor};
 use tree_sitter_bibtex as bibparser;
 
@@ -33,15 +34,17 @@ pub struct BibEntry<'a> {
 }
 
 impl<'a> BibEntry<'a> {
-
-    pub fn from_node(node : Node<'a>) -> Option<Self> {
+    pub fn from_node(node: Node<'a>) -> Option<Self> {
         let mut e_cursor = node.walk();
         let mut f_cursor = node.walk();
         Self::from_node_fast(node, &mut e_cursor, &mut f_cursor)
     }
 
-    fn from_node_fast(node: Node<'a>, e_cursor : &mut TreeCursor<'a>,
-                                 f_cursor : &mut TreeCursor<'a>) -> Option<Self> {
+    fn from_node_fast(
+        node: Node<'a>,
+        e_cursor: &mut TreeCursor<'a>,
+        f_cursor: &mut TreeCursor<'a>,
+    ) -> Option<Self> {
         if !(node.kind() == "entry") {
             return None;
         }
@@ -135,14 +138,14 @@ impl<'a> BibFile<'a> {
         let mut entries = vec![];
 
         for main_block in self.tree.root_node().children(&mut cursor) {
-            if let Some(entry) = BibEntry::from_node_fast(main_block, &mut e_cursor, &mut f_cursor) {
+            if let Some(entry) = BibEntry::from_node_fast(main_block, &mut e_cursor, &mut f_cursor)
+            {
                 entries.push(entry);
             }
         }
 
         entries.into_iter()
     }
-
 }
 
 struct DFSIterator<'a> {
