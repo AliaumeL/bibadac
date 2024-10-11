@@ -11,6 +11,7 @@ use std::io::Read;
 
 use colored::Colorize;
 
+use bibadac::arxiv_identifiers::ArxivId;
 use bibadac::bibdb::LocalBibDb;
 use bibadac::bibtex::BibFile;
 use bibadac::format::{write_bibfile, FormatOptions};
@@ -40,10 +41,10 @@ fn windowed(s: &str, start: usize, end: usize, window_size: usize) -> (&str, &st
 #[command(name = "bibadac")]
 #[command(about = "A tool to handle bibliographic data")]
 struct Cli {
-    #[command(subcommand)]
-    command: SubCommand,
     #[arg(short, long)]
     config: Option<std::path::PathBuf>,
+    #[command(subcommand)]
+    command: SubCommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -55,7 +56,10 @@ enum SubCommand {
     Check(CheckArgs),
     #[command(about = "Format a BibTeX/BibLaTeX file", arg_required_else_help = true)]
     Format(FormatArgs),
-    #[command(about = "Download pdfs that are mentionned in the file")]
+    #[command(
+        about = "Download pdfs that are mentionned in the file",
+        arg_required_else_help = true
+    )]
     Setup(SetupArgs),
 }
 
@@ -115,14 +119,14 @@ struct SetupArgs {
     files: FileArgs,
     #[arg(short, long, help = "Save bibentries to a file")]
     to_file: Option<std::path::PathBuf>,
-    #[arg(short, long, help = "Print the bibentries")]
-    output: bool,
+    #[arg(short = 'o', long, help = "Print the bibentries")]
+    no_output: bool,
     #[arg(short, long, help = "Download the pdfs")]
     documents: bool,
     #[arg(short, long, help = "Directory to save the pdfs")]
     working_directory: Option<std::path::PathBuf>,
-    #[arg(short, long, help = "Show progress of the downloads")]
-    progress: bool,
+    #[arg(short = 'p', long, help = "Do not show progress of the downloads")]
+    no_progress: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +371,7 @@ fn main() {
             use bibadac::setup::{DownloadHandler, DownloadRequest};
             let files = cargs.files.list_files();
             let downloader = bibadac::setup::DxDoiDownloader::default();
+            let pdf_downloader = bibadac::setup::PdfDownloader::default();
             let mut dois: HashSet<String> = HashSet::new();
             let mut eprints: HashSet<String> = HashSet::new();
             let mut sha256s: HashSet<String> = HashSet::new();
@@ -381,7 +386,6 @@ fn main() {
                                 dois.insert(value.to_string());
                             }
                             "eprint" => {
-                                // FIXME: insert both the eprint and its "canonical" form
                                 eprints.insert(value.to_string());
                             }
                             "sha256" => {
@@ -420,30 +424,23 @@ fn main() {
                 .unwrap();
 
             let doi_requests: Vec<_> = dois.iter().map(|d| DownloadRequest::Doi(d)).collect();
+            let pdf_requests: Vec<_> = eprints
+                .iter()
+                .filter_map(|e| Some(DownloadRequest::Arxiv(ArxivId::try_from(e.as_str()).ok()?)))
+                .chain(dois.iter().map(|d| DownloadRequest::Doi(d)))
+                .collect();
 
-            if cargs.progress {
+            if !cargs.no_progress {
                 println!("{} {} dois", "[TOTAL]".blue(), dois.len());
             }
             rt.block_on(async {
                 let res = downloader
                     .download(&doi_requests, |url| {
-                        if cargs.progress {
-                            println!("{} {}", "[Downloading]".green(), url);
+                        if !cargs.no_progress {
+                            println!("{}\t{}", "[BibEntry]".green(), url);
                         }
                     })
                     .await;
-                let mut count = 0;
-                for r in res.iter() {
-                    if let Some(s) = r {
-                        if cargs.output {
-                            println!("{}", s);
-                        }
-                        count += 1;
-                    }
-                }
-                if cargs.progress {
-                    println!("{} {} / {}", "[TOTAL]".blue(), count, dois.len());
-                }
                 if let Some(path) = cargs.to_file {
                     use std::io::Write;
                     // we append to the file and create the file if it
@@ -458,6 +455,40 @@ fn main() {
                             writeln!(out, "{}", s).unwrap();
                         }
                     }
+                }
+                if !cargs.no_progress {
+                    println!("{} {} pdfs", "[TOTAL]".blue(), pdf_requests.len());
+                }
+                let pdfs = pdf_downloader
+                    .download(&pdf_requests, |url| {
+                        if !cargs.no_progress {
+                            println!("{}\t\t{}", "[PDF]".green(), url);
+                        }
+                    })
+                    .await;
+                let mut count = 0;
+                for r in pdfs.iter() {
+                    if let Some(s) = r {
+                        if !cargs.no_output {
+                            println!("{}\t{}", "Created File".blue(), s);
+                        }
+                        count += 1;
+                    }
+                }
+                if !cargs.no_progress {
+                    println!("{} {} / {}", "[TOTAL]".blue(), count, pdf_requests.len());
+                }
+                let mut count = 0;
+                for r in res.iter() {
+                    if let Some(s) = r {
+                        if !cargs.no_output {
+                            println!("{}", s);
+                        }
+                        count += 1;
+                    }
+                }
+                if !cargs.no_progress {
+                    println!("{} {} / {}", "[TOTAL]".blue(), count, dois.len());
                 }
             });
         }

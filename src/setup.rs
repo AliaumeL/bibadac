@@ -12,6 +12,14 @@
 //
 use crate::arxiv_identifiers::ArxivId;
 use reqwest::Client;
+use std::sync::OnceLock;
+
+// typical url
+// type="application/pdf" src="//zero.sci-hub.se/407/de27ca7d3dc4c4fddd8bac961171940d/kirsten2002.pdf#
+fn sci_hub_pdf_regex() -> &'static regex::Regex {
+    static INIT: OnceLock<regex::Regex> = OnceLock::new();
+    INIT.get_or_init(|| regex::Regex::new(r"(src=.)([\/A-Za-z0-9\.-]+)(\.pdf)").unwrap())
+}
 
 #[derive(Debug)]
 pub enum DownloadRequest<'a> {
@@ -21,18 +29,27 @@ pub enum DownloadRequest<'a> {
 }
 
 #[allow(async_fn_in_trait)]
-pub trait DownloadHandler<T : Fn(&str) -> ()> {
+pub trait DownloadHandler<T: Fn(&str) -> ()> {
     fn can_handle(&self, request: &DownloadRequest) -> bool;
-    async fn download<'a>(&self, request: &[DownloadRequest<'a>], progress: T) -> Vec<Option<String>>;
+    async fn download<'a>(
+        &self,
+        request: &[DownloadRequest<'a>],
+        progress: T,
+    ) -> Vec<Option<String>>;
 }
 
 #[derive(Default)]
-pub struct ArxivDownloader  {
-    client: Client
+pub struct ArxivDownloader {
+    client: Client,
 }
 
-pub struct DxDoiDownloader  {
-    client: Client
+pub struct DxDoiDownloader {
+    client: Client,
+}
+
+#[derive(Default)]
+pub struct PdfDownloader {
+    client: Client,
 }
 
 impl Default for DxDoiDownloader {
@@ -44,8 +61,8 @@ impl Default for DxDoiDownloader {
         );
         headers.insert(
             "Mailto",
-            reqwest::header::HeaderValue::from_static("ad.lopez@uw.edu.pl")
-            );
+            reqwest::header::HeaderValue::from_static("ad.lopez@uw.edu.pl"),
+        );
 
         let client = reqwest::Client::builder()
             .user_agent(concat!(
@@ -54,18 +71,12 @@ impl Default for DxDoiDownloader {
                 env!("CARGO_PKG_VERSION")
             ))
             .default_headers(headers)
-            .build().expect("Could not build http client");
+            .build()
+            .expect("Could not build http client");
 
         DxDoiDownloader { client }
     }
 }
-
-
-#[derive(Default)]
-pub struct ScihubDownloader {
-    client: Client
-}
-
 
 impl DxDoiDownloader {
     pub fn new() -> Self {
@@ -76,7 +87,7 @@ impl DxDoiDownloader {
         if let DownloadRequest::Doi(doi) = request {
             let url = format!("https://dx.doi.org/{}", doi);
             let response = self.client.get(url).send().await.ok()?;
-            let text     = response.text_with_charset("utf-8").await.ok()?;
+            let text = response.text_with_charset("utf-8").await.ok()?;
             if text.starts_with(" @") {
                 Some(text)
             } else {
@@ -89,17 +100,14 @@ impl DxDoiDownloader {
 }
 
 impl ArxivDownloader {
-    fn new() -> Self {
+    pub fn new() -> Self {
         ArxivDownloader::default()
     }
 
     async fn download_one<'a>(&self, request: &DownloadRequest<'a>) -> Option<String> {
         if let DownloadRequest::Arxiv(id) = request {
-            eprintln!("Downloading arxiv paper {}", id);
             let url = id.to_pdf_url();
-            eprintln!("URL: {}", url);
             let response = self.client.get(url).send().await.ok()?;
-            eprintln!("Response: {:?}", response);
             let _ = response.bytes().await.ok()?;
             Some("<PDF DATA>".to_string())
         } else {
@@ -108,8 +116,80 @@ impl ArxivDownloader {
     }
 }
 
+impl PdfDownloader {
+    pub fn new() -> Self {
+        PdfDownloader::default()
+    }
+
+    async fn download_one<'a>(&self, request: &DownloadRequest<'a>) -> Option<String> {
+        use std::io::Write;
+        let pdf_url: String = match request {
+            DownloadRequest::Arxiv(id) => id.to_pdf_url(),
+            DownloadRequest::Doi(doi) => {
+                // using scihub
+                let url = format!("https://sci-hub.se/{}", doi);
+                let page = self.client.get(url).send().await.ok()?.text().await.ok()?;
+                let pdf_stub = sci_hub_pdf_regex().captures(&page)?.get(2)?.as_str();
+                format!("https:{}.pdf", pdf_stub)
+            }
+            DownloadRequest::Url(url) => url.to_string(),
+        };
+        let response = self.client.get(pdf_url).send().await.ok()?;
+        let pdf_bytes = response.bytes().await.ok()?;
+        let filename = format!(
+            "{}.pdf",
+            format!("{:?}", request)
+                .to_ascii_lowercase()
+                .replace(" ", "_")
+                .replace("(", "_")
+                .replace(")", "_")
+                .replace("/", "_")
+                .replace(":", "_")
+                .replace("?", "_")
+                .replace("=", "_")
+                .replace("&", "_")
+                .replace("'", "_")
+                .replace("{", "_")
+                .replace("}", "_")
+                .replace(",", "_")
+                .replace("\"", "_")
+                .replace(".", "_")
+        );
+
+        let mut file = std::fs::File::create(&filename).ok()?;
+        file.write_all(&pdf_bytes).ok()?;
+        Some(filename)
+    }
+}
+
+impl<T> DownloadHandler<T> for PdfDownloader
+where
+    T: Fn(&str) -> (),
+{
+    fn can_handle(&self, _: &DownloadRequest) -> bool {
+        true
+    }
+
+    async fn download<'a>(
+        &self,
+        request: &[DownloadRequest<'a>],
+        progress: T,
+    ) -> Vec<Option<String>> {
+        use futures::stream::{self, StreamExt};
+        let res = stream::iter(request.iter().map(|r| {
+            progress(&format!("{:?}", r));
+            self.download_one(r)
+        }))
+        .buffer_unordered(5)
+        .collect()
+        .await;
+        res
+    }
+}
+
 impl<T> DownloadHandler<T> for DxDoiDownloader
-where T : Fn(&str) -> ()
+where
+    T: Fn(&str) -> (),
 {
     fn can_handle(&self, request: &DownloadRequest) -> bool {
         match request {
@@ -118,22 +198,27 @@ where T : Fn(&str) -> ()
         }
     }
 
-    async fn download<'a>(&self, request: &[DownloadRequest<'a>], progress: T) -> Vec<Option<String>> {
+    async fn download<'a>(
+        &self,
+        request: &[DownloadRequest<'a>],
+        progress: T,
+    ) -> Vec<Option<String>> {
         use futures::stream::{self, StreamExt};
-        let res = stream::iter(request
-            .iter()
-            .map(|r| { progress(&format!("{:?}", r)); self.download_one(r) }))
-            .buffer_unordered(5)
-            .collect()
-            .await;
+        let res = stream::iter(request.iter().map(|r| {
+            progress(&format!("{:?}", r));
+            self.download_one(r)
+        }))
+        .buffer_unordered(5)
+        .collect()
+        .await;
 
         res
     }
-
 }
 
 impl<T> DownloadHandler<T> for ArxivDownloader
-where T : Fn(&str) -> ()
+where
+    T: Fn(&str) -> (),
 {
     fn can_handle(&self, request: &DownloadRequest) -> bool {
         match request {
@@ -142,14 +227,19 @@ where T : Fn(&str) -> ()
         }
     }
 
-    async fn download<'a>(&self, request: &[DownloadRequest<'a>], progress: T) -> Vec<Option<String>> {
+    async fn download<'a>(
+        &self,
+        request: &[DownloadRequest<'a>],
+        progress: T,
+    ) -> Vec<Option<String>> {
         use futures::stream::{self, StreamExt};
-        let res = stream::iter(request
-            .iter()
-            .map(|r| { progress(&format!("{:?}", r)); self.download_one(r) }))
-            .buffer_unordered(5)
-            .collect()
-            .await;
+        let res = stream::iter(request.iter().map(|r| {
+            progress(&format!("{:?}", r));
+            self.download_one(r)
+        }))
+        .buffer_unordered(5)
+        .collect()
+        .await;
         res
     }
 }
