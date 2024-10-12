@@ -1,15 +1,28 @@
 /// This file is used to "set-up" a working environment
 /// from a bibtex file. This means downoalding as much
 /// as possible the pdfs that are mentionned in the file.
-// 1 - How to store a PDF (hash)
-//
-// 2 - Download an arxiv paper (batch mode possible)
-//
-// 3 - Download a DOI paper (batch mode not possible)
-//
-// 4 - Use a caching mechanism to avoid downloading the same file
-// twice.
-//
+
+
+/// TODO: 
+/// download PDFs and create entries of the form 
+///
+/// @mapping{arxiv:sha:<arxivId>,
+///   sha256 = {<sha256>},
+///   eprint = {<arxivId>},
+/// }
+///
+/// @mapping{doi:sha:<doi>,
+///    sha256 = {<sha256>},
+///    doi    = {<doi>},
+/// }
+///
+/// These can then be used to autocomplete entries.
+///
+/// 1. Download the PDFs (using arxiv / scihub [compile flag])
+/// 2. Compute the sha256 of the PDFs
+/// 3. Create the entries
+///
+
 use crate::arxiv_identifiers::ArxivId;
 use reqwest::Client;
 use std::sync::OnceLock;
@@ -104,11 +117,25 @@ impl ArxivDownloader {
         ArxivDownloader::default()
     }
 
+    // We download the direct feed from the arxiv API
+    // -> we use an rss parser to extract a "bibtex entry"
+    // -> we output the bibtex entry
+    // @misc{<arxivId>,
+    //  title = {<title>},
+    //  author = {<author>},
+    //  year = {<year>},
+    //  abstract = {<abstract>},
+    //  archivePrefix = {arXiv},
+    //  eprint = {<arxivId>},
+    //  primaryClass = {<primaryClass>},
+    //  }
     async fn download_one<'a>(&self, request: &DownloadRequest<'a>) -> Option<String> {
         if let DownloadRequest::Arxiv(id) = request {
-            let url = id.to_pdf_url();
+            let url = id.to_api_url();
             let response = self.client.get(url).send().await.ok()?;
-            let _ = response.bytes().await.ok()?;
+            println!("{:?}", response);
+            let _ = response.text_with_charset("utf-8").await.ok()?;
+            // TODO: parse
             Some("<PDF DATA>".to_string())
         } else {
             None

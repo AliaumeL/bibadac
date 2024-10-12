@@ -4,7 +4,7 @@
 ///
 use std::fmt::{self, Display, Formatter};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArxivId<'a> {
     pub id: &'a str,
     pub version: Option<usize>,
@@ -71,5 +71,9 @@ impl ArxivId<'_> {
 
     pub fn to_pdf_url(&self) -> String {
         format!("https://arxiv.org/pdf/{}", self.id)
+    }
+
+    pub fn to_api_url(&self) -> String {
+        format!("https://arxiv.org/api/query?id_list={}", self.id)
     }
 }

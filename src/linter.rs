@@ -41,6 +41,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::arxiv_identifiers::ArxivId;
 use crate::author_format::check_authors;
 use crate::bibtex::tree_sitter::Node;
 use crate::bibtex::{BibEntry, BibFile};
@@ -67,7 +68,7 @@ pub enum LintMessage {
     DuplicateFieldName(String),
     DuplicateKey(String),
     DuplicateDoiArxivSha256(String, String, String),
-    OutdatedEntry,
+    OutdatedEntry(String, usize, usize),
     PublishedEquivalent,
     RevokedEntry,
 }
@@ -87,7 +88,7 @@ impl LintMessage {
             LintMessage::DuplicateFieldName(_) => true,
             LintMessage::DuplicateKey(_) => true,
             LintMessage::DuplicateDoiArxivSha256(_, _, _) => true,
-            LintMessage::OutdatedEntry => false,
+            LintMessage::OutdatedEntry(_,_,_) => true,
             LintMessage::PublishedEquivalent => false,
             LintMessage::RevokedEntry => false,
         }
@@ -206,6 +207,8 @@ impl<'a> LinterState<'a> {
         let mut used_keys: HashMap<&str, Vec<Node<'a>>> = HashMap::new();
         let mut doi_arxiv_sha256: HashMap<(&'a str, &'a str, &'a str), Vec<Node<'a>>> =
             HashMap::new();
+        let mut arxiv_with_doi : HashSet<&'a str> = HashSet::new();
+        let mut arxiv_usage    : HashMap<&'a str, Vec<Node<'a>>> = HashMap::new();
 
         // 0. check for syntax errors in the file
         // (list error nodes as "syntax errors")
@@ -218,6 +221,7 @@ impl<'a> LinterState<'a> {
             }
         }
 
+        // accumulate
         // 1. accumulate errors for all the entries
         // 2. check for duplicate entries (same key)
         for entry in entries {
@@ -239,6 +243,11 @@ impl<'a> LinterState<'a> {
                 .entry((doi, arxiv, sha256))
                 .or_default()
                 .push(entry.loc);
+
+            arxiv_usage.entry(arxiv).or_insert(vec![]).push(entry.loc);
+            if !doi.is_empty() && !arxiv.is_empty() {
+                arxiv_with_doi.insert(arxiv);
+            }
 
             used_keys.entry(key).or_insert(vec![]).push(entry.loc);
             messages.extend(self.lint_entry(file, entry));
@@ -271,7 +280,20 @@ impl<'a> LinterState<'a> {
         // a. take all arxiv entries, remove those that have a DOI associated
         //    (print an error if the arxiv version is not pinned)
         // b. check if the arxiv version is outdated for the rest of the entries
-
+        for (arxiv, locs) in arxiv_usage {
+            if !arxiv_with_doi.contains(&arxiv) {
+                let parsed_id = ArxivId::try_from(arxiv).ok().and_then(|x| x.version);
+                match (self.arxiv_latest.get(arxiv), parsed_id) {
+                    (Some(&arxi), Some(number)) if arxi > number => {
+                            messages.push(Lint {
+                                msg: LintMessage::OutdatedEntry(arxiv.to_string(), arxi, number),
+                                loc: locs
+                            });
+                    },
+                    _ => {}
+                }
+            }
+        }
         // 5. published equivalents (arxiv -> doi / doi -> arxiv)
         // TODO.
 

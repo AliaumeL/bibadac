@@ -11,11 +11,11 @@ use std::io::Read;
 
 use colored::Colorize;
 
-use bibadac::arxiv_identifiers::ArxivId;
 use bibadac::bibdb::LocalBibDb;
 use bibadac::bibtex::BibFile;
 use bibadac::format::{write_bibfile, FormatOptions};
 use bibadac::linter::{LintMessage, LinterState};
+use bibadac::arxiv_identifiers::ArxivId;
 
 use std::collections::HashSet;
 
@@ -85,6 +85,8 @@ struct CheckArgs {
     executive_summary: bool,
     #[arg(short, long, help = "Output the errors in JSON format")]
     to_json: bool,
+    #[arg(short, long, help = "Use a helper bibfile to check semantic errors")]
+    file_db: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -194,12 +196,36 @@ fn main() {
 
     match args.command {
         SubCommand::Check(cargs) => {
-            let linter = LinterState {
+            use std::collections::HashSet;
+
+            let mut linter = LinterState {
                 revoked_dois: Default::default(),
                 arxiv_latest: Default::default(),
                 doi_arxiv: Default::default(),
                 arxiv_doi: Default::default(),
             };
+
+            let mut start_bib = String::new();
+            if let Some(path) = cargs.file_db {
+                start_bib = std::fs::read_to_string(path).unwrap();
+            }
+
+            let bibtex = BibFile::new(&start_bib);
+            let eprints = bibtex.list_entries()
+                .flat_map(|entry| {
+                    entry.fields.into_iter()
+                        .filter(|f| bibtex.get_slice(f.name) == "eprint")
+                        .map(|f|  bibtex.get_braceless_slice(f.value))
+                        .filter_map(|e| ArxivId::try_from(e).ok())
+                }).collect::<HashSet<_>>();
+            for eprint in eprints {
+                if let Some(v) = eprint.version {
+                    linter.arxiv_latest.entry(eprint.id)
+                                       .and_modify(|u| *u = std::cmp::max(*u,v))
+                                       .or_insert(v);
+                }
+            }
+
             let files = cargs.files.list_files();
             let inputs = files
                 .iter()
@@ -368,13 +394,17 @@ fn main() {
             }
         }
         SubCommand::Setup(cargs) => {
-            use bibadac::setup::{DownloadHandler, DownloadRequest};
+            use bibadac::setup::{DownloadRequest, DownloadHandler};
             let files = cargs.files.list_files();
-            let downloader = bibadac::setup::DxDoiDownloader::default();
-            let pdf_downloader = bibadac::setup::PdfDownloader::default();
+
+            let doi_downloader = bibadac::setup::DxDoiDownloader::new();
+            let epr_downloader = bibadac::setup::ArxivDownloader::new();
+            let pdf_downloader = bibadac::setup::PdfDownloader::new();
+
             let mut dois: HashSet<String> = HashSet::new();
             let mut eprints: HashSet<String> = HashSet::new();
             let mut sha256s: HashSet<String> = HashSet::new();
+
             for bib in files {
                 let bibtex = BibFile::new(&bib.content);
                 for entry in bibtex.list_entries() {
@@ -387,6 +417,10 @@ fn main() {
                             }
                             "eprint" => {
                                 eprints.insert(value.to_string());
+                                // add the "non pinned" version of the eprint
+                                if let Ok(e) = ArxivId::try_from(value) {
+                                    eprints.insert(e.id.to_string());
+                                }
                             }
                             "sha256" => {
                                 sha256s.insert(value.to_string());
@@ -397,9 +431,9 @@ fn main() {
                 }
             }
 
-            // if there is an "output bibfile", we first open this
-            // file to check if some dois already have been downloaded
-            // and we remove them from the list of dois to download
+            // if there is an "output bibfile", we first open this 
+            // file to check if some dois/shas/eprints already have been downloaded
+            // and we remove them from the list of things to download
             if let Some(path) = &cargs.to_file {
                 let start_bib = std::fs::read_to_string(path).unwrap();
                 let bibtex = BibFile::new(&start_bib);
@@ -411,11 +445,30 @@ fn main() {
                             "doi" => {
                                 dois.remove(value);
                             }
+                            "eprint" => {
+                                eprints.remove(value);
+                            }
+                            "sha256" => {
+                                sha256s.remove(value);
+                            }
                             _ => {}
                         }
                     }
                 }
             }
+
+            let doi_requests: Vec<_> = dois.iter().map(|d| DownloadRequest::Doi(d)).collect();
+            let arxiv_requests : Vec<_> = 
+                eprints.iter().filter_map(|d| {
+                    Some(DownloadRequest::Arxiv(ArxivId::try_from(d.as_str()).ok()?))
+                }).collect();
+            let pdf_requests: Vec<_> = dois
+                .iter()
+                .map(|d| DownloadRequest::Doi(d))
+                .chain(eprints.iter().filter_map(|d| {
+                    Some(DownloadRequest::Arxiv(ArxivId::try_from(d.as_str()).ok()?))
+                }))
+                .collect();
 
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_io()
@@ -423,24 +476,45 @@ fn main() {
                 .build()
                 .unwrap();
 
-            let doi_requests: Vec<_> = dois.iter().map(|d| DownloadRequest::Doi(d)).collect();
-            let pdf_requests: Vec<_> = eprints
-                .iter()
-                .filter_map(|e| Some(DownloadRequest::Arxiv(ArxivId::try_from(e.as_str()).ok()?)))
-                .chain(dois.iter().map(|d| DownloadRequest::Doi(d)))
-                .collect();
-
             if !cargs.no_progress {
-                println!("{} {} dois", "[TOTAL]".blue(), dois.len());
+                println!("{} {} dois / {} eprints / {} pdfs", 
+                         "[TOTAL]".blue(), 
+                         dois.len(),
+                         eprints.len(),
+                         pdf_requests.len());
             }
-            rt.block_on(async {
-                let res = downloader
-                    .download(&doi_requests, |url| {
-                        if !cargs.no_progress {
-                            println!("{}\t{}", "[BibEntry]".green(), url);
+
+            rt.block_on(async { 
+                // store the bib entries as a list of strings
+                let mut res = vec![];
+
+                let res_doi  = doi_downloader.download(&doi_requests, |url| {
+                    if !cargs.no_progress {
+                        println!("{} {}\t{}", "[DOI]".green(), "doi".blue(), url);
+                    }
+                }).await;
+                let res_eprint = epr_downloader.download(&arxiv_requests, |url| {
+                    if !cargs.no_progress {
+                        println!("{} {}\t{}", "[arXiv]".green(), "arxiv".blue(), url);
+                    }
+                }).await;
+                res.extend(res_doi);
+                res.extend(res_eprint);
+
+                // TODO: better report
+                let mut count = 0;
+                for r in res.iter() {
+                    if let Some(s) = r {
+                        if !cargs.no_output {
+                            println!("{}", s);
                         }
-                    })
-                    .await;
+                        count += 1;
+                    }
+                }
+                if !cargs.no_progress {
+                    println!("{} {} / {} entries retrieved", "[TOTAL]".blue(), count, dois.len() + eprints.len());
+                }
+
                 if let Some(path) = cargs.to_file {
                     use std::io::Write;
                     // we append to the file and create the file if it
@@ -456,9 +530,7 @@ fn main() {
                         }
                     }
                 }
-                if !cargs.no_progress {
-                    println!("{} {} pdfs", "[TOTAL]".blue(), pdf_requests.len());
-                }
+
                 let pdfs = pdf_downloader
                     .download(&pdf_requests, |url| {
                         if !cargs.no_progress {
@@ -466,6 +538,7 @@ fn main() {
                         }
                     })
                     .await;
+
                 let mut count = 0;
                 for r in pdfs.iter() {
                     if let Some(s) = r {
@@ -475,20 +548,9 @@ fn main() {
                         count += 1;
                     }
                 }
+
                 if !cargs.no_progress {
                     println!("{} {} / {}", "[TOTAL]".blue(), count, pdf_requests.len());
-                }
-                let mut count = 0;
-                for r in res.iter() {
-                    if let Some(s) = r {
-                        if !cargs.no_output {
-                            println!("{}", s);
-                        }
-                        count += 1;
-                    }
-                }
-                if !cargs.no_progress {
-                    println!("{} {} / {}", "[TOTAL]".blue(), count, dois.len());
                 }
             });
         }
