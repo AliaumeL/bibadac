@@ -14,7 +14,7 @@ use colored::Colorize;
 use bibadac::bibdb::LocalBibDb;
 use bibadac::bibtex::BibFile;
 use bibadac::format::{write_bibfile, FormatOptions};
-use bibadac::linter::{LintMessage, LinterState};
+use bibadac::linter::{LintMessage, LinterState, Lint};
 use bibadac::arxiv_identifiers::ArxivId;
 
 use std::collections::HashSet;
@@ -151,7 +151,7 @@ impl InputFiles for FileArgs {
                     eprintln!("File {:?} does not exist", name);
                     return None;
                 }
-                let content = std::fs::read_to_string(name).unwrap();
+                let content = std::fs::read_to_string(name).expect("Could not read input file");
                 Some(InputFile {
                     name: name.clone(),
                     content,
@@ -159,7 +159,7 @@ impl InputFiles for FileArgs {
             })
             .chain(if use_stdin {
                 let mut content = String::new();
-                std::io::stdin().read_to_string(&mut content).unwrap();
+                std::io::stdin().read_to_string(&mut content).expect("Could not read stdin");
                 vec![InputFile {
                     name: "stdin".into(),
                     content,
@@ -191,6 +191,78 @@ struct JsonReportLint {
     loc: Vec<JsonReportLoc>,
 }
 
+
+fn print_json_lints(lints: Vec<(&InputFile, &BibFile, Vec<Lint>)>) {
+    let mut out = std::io::stdout();
+    let json_report = lints
+        .iter()
+        .map(|(bib, _, lints)| JsonReportEntry {
+            file: bib.name.to_string_lossy().to_string(),
+            errors: lints
+                .iter()
+                .map(|l| JsonReportLint {
+                    msg: l.msg.clone(),
+                    loc: l
+                        .loc
+                        .iter()
+                        .map(|n| JsonReportLoc {
+                            line: n.start_position().row + 1,
+                            column: n.start_position().column + 1,
+                            start_byte: n.start_byte(),
+                            end_byte: n.end_byte(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_writer_pretty(&mut out, &json_report).expect("Could not write json report");
+}
+
+
+fn print_bib_lint(bibtex: &BibFile, bib: &InputFile, l: &Lint) {
+    println!(
+        "{}\n<{:?}:L{}:C{}>\n{:?}",
+        "Error".red(),
+        bib.name,
+        l.loc[0].start_position().row + 1,
+        l.loc[0].start_position().column + 1,
+        l.msg
+    );
+    println!(
+        "{}",
+        l.loc
+            .iter()
+            .map(|n| {
+                let s = bibtex.get_slice(*n);
+                s.lines()
+                    .take(3)
+                    .zip(1..)
+                    .map(|(l, i)| {
+                        format!("{:>4}| {}", i + n.start_position().row, l)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n...\n")
+            .blue()
+    );
+    if let LintMessage::SyntaxError(_) = l.msg {
+        // print a bit before and a bit after
+        // using colors to highlight the error
+        let start = l.loc[0].start_byte();
+        let end = l.loc[0].end_byte();
+        let (before, error, after) = windowed(&bibtex.content, start, end, 20);
+
+        print!("{}", before);
+        print!("{}", error.red());
+        print!("{}", after);
+    }
+    println!();
+}
+
+
 fn main() {
     let args = Cli::parse();
 
@@ -198,16 +270,11 @@ fn main() {
         SubCommand::Check(cargs) => {
             use std::collections::HashSet;
 
-            let mut linter = LinterState {
-                revoked_dois: Default::default(),
-                arxiv_latest: Default::default(),
-                doi_arxiv: Default::default(),
-                arxiv_doi: Default::default(),
-            };
+            let mut linter = LinterState::default();
 
             let mut start_bib = String::new();
             if let Some(path) = cargs.file_db {
-                start_bib = std::fs::read_to_string(path).unwrap();
+                start_bib = std::fs::read_to_string(path).expect("Could not read the helper bibfile");
             }
 
             let bibtex = BibFile::new(&start_bib);
@@ -226,6 +293,8 @@ fn main() {
                 }
             }
 
+            eprintln!("Linter state: {:?}", linter);
+
             let files = cargs.files.list_files();
             let inputs = files
                 .iter()
@@ -238,13 +307,13 @@ fn main() {
             for (bib, tex) in inputs.iter() {
                 if !cargs.concise {
                     lints.push((
-                        bib,
+                        *bib,
                         tex,
                         linter.lint_file(&tex, tex.list_entries().collect()),
                     ));
                 } else {
                     lints.push((
-                        bib,
+                        *bib,
                         tex,
                         linter
                             .lint_file(&tex, tex.list_entries().collect())
@@ -256,30 +325,7 @@ fn main() {
             }
 
             if cargs.to_json {
-                let mut out = std::io::stdout();
-                let json_report = lints
-                    .iter()
-                    .map(|(bib, _, lints)| JsonReportEntry {
-                        file: bib.name.to_string_lossy().to_string(),
-                        errors: lints
-                            .iter()
-                            .map(|l| JsonReportLint {
-                                msg: l.msg.clone(),
-                                loc: l
-                                    .loc
-                                    .iter()
-                                    .map(|n| JsonReportLoc {
-                                        line: n.start_position().row + 1,
-                                        column: n.start_position().column + 1,
-                                        start_byte: n.start_byte(),
-                                        end_byte: n.end_byte(),
-                                    })
-                                    .collect(),
-                            })
-                            .collect(),
-                    })
-                    .collect::<Vec<_>>();
-                serde_json::to_writer_pretty(&mut out, &json_report).unwrap();
+                print_json_lints(lints);
                 return;
             }
 
@@ -292,59 +338,22 @@ fn main() {
                     println!("{} {} {} \t {:?}", "[KO]".red(), lints.len(), err, bib.name);
                 }
             }
-            // 2. print the errors for each file if verbose
+
+            // 2. do not print the errors for each file if verbose
             if cargs.executive_summary {
                 return;
             }
 
             for (bib, bibtex, lints) in lints.iter() {
                 for l in lints {
-                    println!(
-                        "{}\n<{:?}:L{}:C{}>\n{:?}",
-                        "Error".red(),
-                        bib.name,
-                        l.loc[0].start_position().row + 1,
-                        l.loc[0].start_position().column + 1,
-                        l.msg
-                    );
-                    println!(
-                        "{}",
-                        l.loc
-                            .iter()
-                            .map(|n| {
-                                let s = bibtex.get_slice(*n);
-                                s.lines()
-                                    .take(3)
-                                    .zip(1..)
-                                    .map(|(l, i)| {
-                                        format!("{:>4}| {}", i + n.start_position().row, l)
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n...\n")
-                            .blue()
-                    );
-                    if let LintMessage::SyntaxError(_) = l.msg {
-                        // print a bit before and a bit after
-                        // using colors to highlight the error
-                        let start = l.loc[0].start_byte();
-                        let end = l.loc[0].end_byte();
-                        let (before, error, after) = windowed(&bibtex.content, start, end, 20);
-
-                        print!("{}", before);
-                        print!("{}", error.red());
-                        print!("{}", after);
-                    }
-                    println!();
+                    print_bib_lint(bibtex, bib, l);
                 }
             }
         }
         SubCommand::Format(cargs) => {
             let mut db = LocalBibDb::new();
             if let Some(path) = cargs.file_db {
-                let start_bib = std::fs::read_to_string(path).unwrap();
+                let start_bib = std::fs::read_to_string(path).expect("Could not read the helper bibfile");
                 db = db.import_bibtex(&start_bib);
             }
 
@@ -383,10 +392,10 @@ fn main() {
                 format_options.min_field_length = Some(max_field_length);
                 if cargs.to_file {
                     let newpath = bib.name.with_extension("new.bib");
-                    let mut out = std::fs::File::create(newpath).unwrap();
+                    let mut out = std::fs::File::create(newpath).expect("Could not create the output file");
                     write_bibfile(&bibtex, &format_options, &mut out);
                 } else if cargs.in_place {
-                    let mut out = std::fs::File::create(&bib.name).unwrap();
+                    let mut out = std::fs::File::create(&bib.name).expect("Could not create the output file");
                     write_bibfile(&bibtex, &format_options, &mut out);
                 } else {
                     write_bibfile(&bibtex, &format_options, &mut stdout);
@@ -394,14 +403,23 @@ fn main() {
             }
         }
         SubCommand::Setup(cargs) => {
-            use bibadac::setup::{DownloadRequest, DownloadHandler};
+            use bibadac::setup::SetupConfig;
             let files = cargs.files.list_files();
 
-            let doi_downloader = bibadac::setup::DxDoiDownloader::new();
-            let epr_downloader = bibadac::setup::ArxivDownloader::new();
-            let pdf_downloader = bibadac::setup::PdfDownloader::new();
+            let mut config = SetupConfig::default();
+            config.progress = !cargs.no_progress;
+            config.download_pdf = cargs.documents;
+            if let Some(path) = &cargs.working_directory {
+                config.working_directory = path.clone();
+            } else {
+                config.working_directory = std::env::current_dir().expect("Could not get the current directory");
+            }
 
-            let mut dois: HashSet<String> = HashSet::new();
+            if let Some(database) = &cargs.to_file {
+                config.import_bibfile(database);
+            }
+
+            let mut dois:    HashSet<String> = HashSet::new();
             let mut eprints: HashSet<String> = HashSet::new();
             let mut sha256s: HashSet<String> = HashSet::new();
 
@@ -431,128 +449,60 @@ fn main() {
                 }
             }
 
-            // if there is an "output bibfile", we first open this 
-            // file to check if some dois/shas/eprints already have been downloaded
-            // and we remove them from the list of things to download
-            if let Some(path) = &cargs.to_file {
-                let start_bib = std::fs::read_to_string(path).unwrap();
-                let bibtex = BibFile::new(&start_bib);
-                for entry in bibtex.list_entries() {
-                    for field in entry.fields.iter() {
-                        let key = bibtex.get_slice(field.name);
-                        let value = bibtex.get_braceless_slice(field.value);
-                        match key {
-                            "doi" => {
-                                dois.remove(value);
-                            }
-                            "eprint" => {
-                                eprints.remove(value);
-                            }
-                            "sha256" => {
-                                sha256s.remove(value);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
-            let doi_requests: Vec<_> = dois.iter().map(|d| DownloadRequest::Doi(d)).collect();
-            let arxiv_requests : Vec<_> = 
-                eprints.iter().filter_map(|d| {
-                    Some(DownloadRequest::Arxiv(ArxivId::try_from(d.as_str()).ok()?))
-                }).collect();
-            let pdf_requests: Vec<_> = dois
-                .iter()
-                .map(|d| DownloadRequest::Doi(d))
-                .chain(eprints.iter().filter_map(|d| {
-                    Some(DownloadRequest::Arxiv(ArxivId::try_from(d.as_str()).ok()?))
-                }))
-                .collect();
-
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_io()
                 .enable_time()
                 .build()
-                .unwrap();
+                .expect("Unable to create the asynchronous runtime");
 
-            if !cargs.no_progress {
-                println!("{} {} dois / {} eprints / {} pdfs", 
-                         "[TOTAL]".blue(), 
-                         dois.len(),
-                         eprints.len(),
-                         pdf_requests.len());
-            }
-
-            rt.block_on(async { 
-                // store the bib entries as a list of strings
-                let mut res = vec![];
-
-                let res_doi  = doi_downloader.download(&doi_requests, |url| {
-                    if !cargs.no_progress {
-                        println!("{} {}\t{}", "[DOI]".green(), "doi".blue(), url);
-                    }
-                }).await;
-                let res_eprint = epr_downloader.download(&arxiv_requests, |url| {
-                    if !cargs.no_progress {
-                        println!("{} {}\t{}", "[arXiv]".green(), "arxiv".blue(), url);
-                    }
-                }).await;
-                res.extend(res_doi);
-                res.extend(res_eprint);
-
-                // TODO: better report
-                let mut count = 0;
-                for r in res.iter() {
-                    if let Some(s) = r {
-                        if !cargs.no_output {
-                            println!("{}", s);
+            rt.block_on(async {
+                let response = config.run(dois, eprints, sha256s).await;
+                if !cargs.no_output {
+                    for (_, result) in response.entries.iter() {
+                        if let Some(entry) = result {
+                            println!("{}", entry);
                         }
-                        count += 1;
+                    }
+                    for (_, result) in response.pdfs.iter() {
+                        if let Some(pdf) = result {
+                            println!("{}", pdf.entry);
+                        }
                     }
                 }
-                if !cargs.no_progress {
-                    println!("{} {} / {} entries retrieved", "[TOTAL]".blue(), count, dois.len() + eprints.len());
-                }
-
-                if let Some(path) = cargs.to_file {
+                if let Some(path) = &cargs.to_file {
                     use std::io::Write;
-                    // we append to the file and create the file if it
-                    // does not exist
-                    let mut out = std::fs::OpenOptions::new()
+                    // create the file if it does not exist already
+                    // otherwise *append* to it
+                    let mut file = std::fs::OpenOptions::new()
                         .create(true)
                         .append(true)
                         .open(path)
-                        .unwrap();
-                    for s in res.iter() {
-                        if let Some(s) = s {
-                            writeln!(out, "{}", s).unwrap();
+                        .expect("Could not open the output file");
+                    for (_, result) in response.entries.iter() {
+                        if let Some(entry) = result {
+                            writeln!(file, "{}", entry).expect("Could not write to the output file");
+                        }
+                    }
+                    for (_, result) in response.pdfs.iter() {
+                        if let Some(pdf) = result {
+                            writeln!(file, "{}", pdf.entry).expect("Could not write to the output file");
                         }
                     }
                 }
-
-                let pdfs = pdf_downloader
-                    .download(&pdf_requests, |url| {
-                        if !cargs.no_progress {
-                            println!("{}\t\t{}", "[PDF]".green(), url);
-                        }
-                    })
-                    .await;
-
-                let mut count = 0;
-                for r in pdfs.iter() {
-                    if let Some(s) = r {
-                        if !cargs.no_output {
-                            println!("{}\t{}", "Created File".blue(), s);
-                        }
-                        count += 1;
-                    }
-                }
-
                 if !cargs.no_progress {
-                    println!("{} {} / {}", "[TOTAL]".blue(), count, pdf_requests.len());
+                    for (key, res) in response.entries.iter() {
+                        if res.is_none() {
+                            println!("[ERR] Could not find entry for {}", key);
+                        }
+                    }
+                    for (key, res) in response.pdfs.iter() {
+                        if res.is_none() {
+                            println!("{} Could not find pdf for {}", "[ERR]".red(), key.yellow());
+                        }
+                    }
                 }
             });
+
         }
     }
 }

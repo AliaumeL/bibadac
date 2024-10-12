@@ -47,6 +47,7 @@ use crate::bibtex::tree_sitter::Node;
 use crate::bibtex::{BibEntry, BibFile};
 use std::fmt::{self, Debug, Formatter};
 
+#[derive(Debug, Clone, Default)]
 pub struct LinterState<'a> {
     pub revoked_dois: HashSet<&'a str>,
     pub arxiv_latest: HashMap<&'a str, usize>,
@@ -108,6 +109,7 @@ impl Debug for Lint<'_> {
 }
 
 impl<'a> LinterState<'a> {
+
     fn lint_field(&self, key: &str, value: &str) -> Option<LintMessage> {
         if value.is_empty() {
             return Some(LintMessage::EmptyKey);
@@ -237,7 +239,7 @@ impl<'a> LinterState<'a> {
                 .collect::<HashMap<_, _>>();
             let key = file.get_slice(entry.key);
             let doi = fields.get("doi").map(|s| *s).unwrap_or("");
-            let arxiv = fields.get("arxiv").map(|s| *s).unwrap_or("");
+            let arxiv = fields.get("eprint").map(|s| *s).unwrap_or("");
             let sha256 = fields.get("sha256").map(|s| *s).unwrap_or("");
             doi_arxiv_sha256
                 .entry((doi, arxiv, sha256))
@@ -281,16 +283,23 @@ impl<'a> LinterState<'a> {
         //    (print an error if the arxiv version is not pinned)
         // b. check if the arxiv version is outdated for the rest of the entries
         for (arxiv, locs) in arxiv_usage {
-            if !arxiv_with_doi.contains(&arxiv) {
-                let parsed_id = ArxivId::try_from(arxiv).ok().and_then(|x| x.version);
-                match (self.arxiv_latest.get(arxiv), parsed_id) {
-                    (Some(&arxi), Some(number)) if arxi > number => {
-                            messages.push(Lint {
-                                msg: LintMessage::OutdatedEntry(arxiv.to_string(), arxi, number),
-                                loc: locs
-                            });
-                    },
-                    _ => {}
+            if !arxiv.is_empty() && !arxiv_with_doi.contains(&arxiv) {
+                eprintln!("arxiv: {}", arxiv);
+                if let Some(parsed_id) = ArxivId::try_from(arxiv).ok() {
+                    eprintln!("parsed: {:?}", parsed_id);
+                    if let Some(version) = parsed_id.version {
+                        eprintln!("version: {}", version);
+                        if let Some(latest) = self.arxiv_latest.get(parsed_id.id) {
+                            eprintln!("latest: {}", latest);
+                            if version < *latest {
+                                eprintln!("outdated");
+                                messages.push(Lint {
+                                    msg: LintMessage::OutdatedEntry(arxiv.to_string(), *latest, version),
+                                    loc: locs
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
