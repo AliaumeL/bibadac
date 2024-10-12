@@ -41,8 +41,6 @@ fn windowed(s: &str, start: usize, end: usize, window_size: usize) -> (&str, &st
 #[command(name = "bibadac")]
 #[command(about = "A tool to handle bibliographic data")]
 struct Cli {
-    #[arg(short, long)]
-    config: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: SubCommand,
 }
@@ -63,6 +61,7 @@ enum SubCommand {
     Setup(SetupArgs),
 }
 
+
 #[derive(Debug, Clone, Args)]
 struct FileArgs {
     #[arg(
@@ -75,10 +74,15 @@ struct FileArgs {
     bib: Vec<std::path::PathBuf>,
 }
 
-#[derive(Debug, Clone, Args)]
-struct CheckArgs {
-    #[clap(flatten)]
-    files: FileArgs,
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct Config {
+    check: CheckConfig,
+    format: FormatConfig,
+    setup: SetupConfig,
+}
+
+#[derive(Debug, Default, Clone, Args, Serialize, Deserialize)]
+struct CheckConfig {
     #[arg(short, long, help = "Show only important errors")]
     concise: bool,
     #[arg(short, long, help = "Hide location of errors to symplify output")]
@@ -89,10 +93,8 @@ struct CheckArgs {
     file_db: Option<std::path::PathBuf>,
 }
 
-#[derive(Debug, Clone, Args)]
-struct FormatArgs {
-    #[clap(flatten)]
-    files: FileArgs,
+#[derive(Debug, Default, Clone, Args, Serialize, Deserialize)]
+struct FormatConfig {
     #[arg(short, long, help = "Create a new file with the formatted content")]
     to_file: bool,
     #[arg(short, long, help = "Update the files *in place* (dangerous)")]
@@ -115,10 +117,8 @@ struct FormatArgs {
     sort_entries: bool,
 }
 
-#[derive(Debug, Clone, Args)]
-struct SetupArgs {
-    #[clap(flatten)]
-    files: FileArgs,
+#[derive(Debug, Clone, Args, Default, Serialize, Deserialize)]
+struct SetupConfig {
     #[arg(short, long, help = "Save bibentries to a file")]
     to_file: Option<std::path::PathBuf>,
     #[arg(short = 'o', long, help = "Print the bibentries")]
@@ -129,6 +129,33 @@ struct SetupArgs {
     working_directory: Option<std::path::PathBuf>,
     #[arg(short = 'p', long, help = "Do not show progress of the downloads")]
     no_progress: bool,
+    #[arg(short = 'm', long, help = "Be polite when talking to CrossRef APIs")]
+    polite_email: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+struct CheckArgs {
+    #[clap(flatten)]
+    files: FileArgs,
+    #[clap(flatten)]
+    config: CheckConfig,
+}
+
+#[derive(Debug, Clone, Args)]
+struct FormatArgs {
+    #[clap(flatten)]
+    files: FileArgs,
+    #[clap(flatten)]
+    config: FormatConfig,
+}
+
+
+#[derive(Debug, Clone, Args)]
+struct SetupArgs {
+    #[clap(flatten)]
+    files: FileArgs,
+    #[clap(flatten)]
+    config: SetupConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -273,7 +300,7 @@ fn main() {
             let mut linter = LinterState::default();
 
             let mut start_bib = String::new();
-            if let Some(path) = cargs.file_db {
+            if let Some(path) = cargs.config.file_db {
                 start_bib = std::fs::read_to_string(path).expect("Could not read the helper bibfile");
             }
 
@@ -293,8 +320,6 @@ fn main() {
                 }
             }
 
-            eprintln!("Linter state: {:?}", linter);
-
             let files = cargs.files.list_files();
             let inputs = files
                 .iter()
@@ -305,7 +330,7 @@ fn main() {
                 .collect::<Vec<_>>();
             let mut lints = vec![];
             for (bib, tex) in inputs.iter() {
-                if !cargs.concise {
+                if !cargs.config.concise {
                     lints.push((
                         *bib,
                         tex,
@@ -324,7 +349,7 @@ fn main() {
                 }
             }
 
-            if cargs.to_json {
+            if cargs.config.to_json {
                 print_json_lints(lints);
                 return;
             }
@@ -340,7 +365,7 @@ fn main() {
             }
 
             // 2. do not print the errors for each file if verbose
-            if cargs.executive_summary {
+            if cargs.config.executive_summary {
                 return;
             }
 
@@ -352,7 +377,7 @@ fn main() {
         }
         SubCommand::Format(cargs) => {
             let mut db = LocalBibDb::new();
-            if let Some(path) = cargs.file_db {
+            if let Some(path) = cargs.config.file_db {
                 let start_bib = std::fs::read_to_string(path).expect("Could not read the helper bibfile");
                 db = db.import_bibtex(&start_bib);
             }
@@ -360,20 +385,19 @@ fn main() {
             let inputs = cargs.files.list_files();
 
             let mut format_options = FormatOptions::new(&mut db);
-            if !cargs.remove_field.is_empty() {
-                format_options.blacklist = Some(cargs.remove_field);
+            if !cargs.config.remove_field.is_empty() {
+                format_options.blacklist = Some(cargs.config.remove_field);
             }
-            if !cargs.keep_field.is_empty() {
-                format_options.whitelist = Some(cargs.keep_field);
+            if !cargs.config.keep_field.is_empty() {
+                format_options.whitelist = Some(cargs.config.keep_field);
             }
-            if !cargs.entry_field.is_empty() {
-                format_options.field_filter = Some(cargs.entry_field);
+            if !cargs.config.entry_field.is_empty() {
+                format_options.field_filter = Some(cargs.config.entry_field);
             }
 
-            format_options.sort_fields = cargs.sort_fields;
-            format_options.sort_entries = cargs.sort_entries;
+            format_options.sort_fields = cargs.config.sort_fields;
+            format_options.sort_entries = cargs.config.sort_entries;
 
-            let mut stdout = std::io::stdout();
 
             for bib in inputs {
                 let bibtex = BibFile::new(&bib.content);
@@ -390,15 +414,22 @@ fn main() {
                     .max()
                     .unwrap_or(0);
                 format_options.min_field_length = Some(max_field_length);
-                if cargs.to_file {
+                use std::io::Write;
+                if cargs.config.to_file {
                     let newpath = bib.name.with_extension("new.bib");
                     let mut out = std::fs::File::create(newpath).expect("Could not create the output file");
-                    write_bibfile(&bibtex, &format_options, &mut out);
-                } else if cargs.in_place {
+                    write!(out,
+                           "{}",
+                           bibadac::format::BibFormat { bib: &bibtex, options: &format_options }).expect("Could not write to the output file");
+                } else if cargs.config.in_place {
                     let mut out = std::fs::File::create(&bib.name).expect("Could not create the output file");
-                    write_bibfile(&bibtex, &format_options, &mut out);
+                    write!(out,
+                           "{}",
+                           bibadac::format::BibFormat { bib: &bibtex, options: &format_options }).expect("Could not write to the output file");
                 } else {
-                    write_bibfile(&bibtex, &format_options, &mut stdout);
+                    write!(std::io::stdout(),
+                           "{}",
+                           bibadac::format::BibFormat { bib: &bibtex, options: &format_options }).expect("Could not write to the output file");
                 }
             }
         }
@@ -407,15 +438,16 @@ fn main() {
             let files = cargs.files.list_files();
 
             let mut config = SetupConfig::default();
-            config.progress = !cargs.no_progress;
-            config.download_pdf = cargs.documents;
-            if let Some(path) = &cargs.working_directory {
+            config.progress = !cargs.config.no_progress;
+            config.download_pdf = cargs.config.documents;
+            config.polite_email = cargs.config.polite_email;
+            if let Some(path) = &cargs.config.working_directory {
                 config.working_directory = path.clone();
             } else {
                 config.working_directory = std::env::current_dir().expect("Could not get the current directory");
             }
 
-            if let Some(database) = &cargs.to_file {
+            if let Some(database) = &cargs.config.to_file {
                 config.import_bibfile(database);
             }
 
@@ -457,7 +489,7 @@ fn main() {
 
             rt.block_on(async {
                 let response = config.run(dois, eprints, sha256s).await;
-                if !cargs.no_output {
+                if !cargs.config.no_output {
                     for (_, result) in response.entries.iter() {
                         if let Some(entry) = result {
                             println!("{}", entry);
@@ -469,7 +501,7 @@ fn main() {
                         }
                     }
                 }
-                if let Some(path) = &cargs.to_file {
+                if let Some(path) = &cargs.config.to_file {
                     use std::io::Write;
                     // create the file if it does not exist already
                     // otherwise *append* to it
@@ -489,7 +521,7 @@ fn main() {
                         }
                     }
                 }
-                if !cargs.no_progress {
+                if !cargs.config.no_progress {
                     for (key, res) in response.entries.iter() {
                         if res.is_none() {
                             println!("[ERR] Could not find entry for {}", key);

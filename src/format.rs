@@ -64,8 +64,10 @@ pub fn write_bibfield<T, K>(
     value: &str,
     options: &FormatOptions<K>,
     out: &mut T,
-) where
-    T: std::io::Write,
+)
+-> std::fmt::Result
+where
+    T: std::fmt::Write,
     K: BibDb,
 {
     let lines: Vec<_> = value.split('\n').collect();
@@ -78,8 +80,7 @@ pub fn write_bibfield<T, K>(
         value = lines[0],
         indent = options.indent,
         width = options.min_field_length.unwrap_or(0),
-    )
-    .unwrap();
+    )?;
     for line in lines[1..].iter() {
         write!(
             out,
@@ -87,10 +88,9 @@ pub fn write_bibfield<T, K>(
             "",
             line.trim(),
             indent = subsequent_indent
-        )
-        .unwrap();
+        )?;
     }
-    write!(out, ",\n").unwrap();
+    write!(out, ",\n")
 }
 
 pub fn write_bibentry<T, K>(
@@ -98,8 +98,10 @@ pub fn write_bibentry<T, K>(
     entry: &BibEntry,
     options: &FormatOptions<K>,
     out: &mut T,
-) where
-    T: std::io::Write,
+) 
+-> std::fmt::Result
+where
+    T: std::fmt::Write,
     K: BibDb,
 {
     let key = bib.get_slice(entry.key);
@@ -131,11 +133,11 @@ pub fn write_bibentry<T, K>(
             .iter()
             .any(|field| field_filter.contains(&bib.get_slice(field.name).to_lowercase()))
         {
-            return;
+            return Ok(());
         }
     }
 
-    write!(out, "{}{{{key},\n", entrytype.to_lowercase(), key = key).unwrap();
+    write!(out, "{}{{{key},\n", entrytype.to_lowercase(), key = key)?;
 
     for field in fields {
         // Skip fields that are not in the whitelist
@@ -155,7 +157,7 @@ pub fn write_bibentry<T, K>(
             let mut formatted_authors = "{".to_string();
             formatted_authors += &format_authors(&authors[1..authors.len() - 1]);
             formatted_authors += "}";
-            write_bibfield(bib, "author", &formatted_authors, options, out);
+            write_bibfield(bib, "author", &formatted_authors, options, out)?;
         } else {
             write_bibfield(
                 bib,
@@ -163,12 +165,12 @@ pub fn write_bibentry<T, K>(
                 bib.get_slice(field.value),
                 options,
                 out,
-            );
+            )?;
         }
     }
 
     if compl.properties.len() > 1 {
-        writeln!(out).unwrap();
+        writeln!(out)?;
     }
     for (name, value) in compl.properties {
         // Skip fields that are not in the whitelist
@@ -183,15 +185,17 @@ pub fn write_bibentry<T, K>(
                 continue;
             }
         }
-        write_bibfield(bib, &name, &value, options, out);
+        write_bibfield(bib, &name, &value, options, out)?;
     }
 
-    write!(out, "}}\n\n").unwrap();
+    write!(out, "}}\n\n")?;
+    Ok(())
 }
 
 pub fn write_bibfile<T, K>(bib: &BibFile, options: &FormatOptions<K>, out: &mut T)
+    -> std::fmt::Result
 where
-    T: std::io::Write,
+    T: std::fmt::Write,
     K: BibDb,
 {
     if options.sort_entries {
@@ -226,17 +230,32 @@ where
             -year
         });
         for entry in entries {
-            write_bibentry(bib, &entry, options, out);
+            write_bibentry(bib, &entry, options, out)?;
         }
     } else {
         let mut cursor = bib.tree.root_node().walk();
         for entry in bib.tree.root_node().children(&mut cursor) {
             if let Some(entry) = BibEntry::from_node(entry) {
-                write_bibentry(bib, &entry, options, out);
+                write_bibentry(bib, &entry, options, out)?;
             } else {
                 let slice = bib.get_slice(entry);
-                write!(out, "{}", slice).unwrap();
+                write!(out, "{}", slice)?;
             }
         }
+    }
+
+    Ok(())
+}
+
+pub struct BibFormat<'a, K> {
+    pub bib: &'a BibFile<'a>,
+    pub options: &'a FormatOptions<K>,
+}
+
+impl<'a,K> std::fmt::Display for BibFormat<'a, K> 
+where K: BibDb 
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_bibfile(self.bib, self.options, f)
     }
 }

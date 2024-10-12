@@ -84,7 +84,7 @@ impl LintMessage {
             LintMessage::ArxivAsDoi => false,
             LintMessage::HttpDoi => false,
             LintMessage::MissingField(_) => true,
-            LintMessage::UncheckableEntry => false,
+            LintMessage::UncheckableEntry => true,
             LintMessage::MissingOptionalField(_) => false,
             LintMessage::DuplicateFieldName(_) => true,
             LintMessage::DuplicateKey(_) => true,
@@ -284,15 +284,10 @@ impl<'a> LinterState<'a> {
         // b. check if the arxiv version is outdated for the rest of the entries
         for (arxiv, locs) in arxiv_usage {
             if !arxiv.is_empty() && !arxiv_with_doi.contains(&arxiv) {
-                eprintln!("arxiv: {}", arxiv);
                 if let Some(parsed_id) = ArxivId::try_from(arxiv).ok() {
-                    eprintln!("parsed: {:?}", parsed_id);
                     if let Some(version) = parsed_id.version {
-                        eprintln!("version: {}", version);
                         if let Some(latest) = self.arxiv_latest.get(parsed_id.id) {
-                            eprintln!("latest: {}", latest);
                             if version < *latest {
-                                eprintln!("outdated");
                                 messages.push(Lint {
                                     msg: LintMessage::OutdatedEntry(arxiv.to_string(), *latest, version),
                                     loc: locs

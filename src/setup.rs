@@ -44,6 +44,7 @@ pub struct SetupConfig {
     pub download_pdf: bool,
     pub dry_run: bool, 
     pub working_directory: std::path::PathBuf,
+    pub polite_email: Option<String>,
 }
 
 #[derive(Debug)]
@@ -139,7 +140,7 @@ impl SetupConfig {
             .filter(|r| !self.already_present(r))
             .collect();
 
-        let doi_downloader = DxDoiDownloader::new();
+        let doi_downloader = DxDoiDownloader::new(self.polite_email.clone());
         let epr_downloader = ArxivDownloader::new();
         let pdf_downloader = PdfDownloader::new(self.working_directory.clone());
 
@@ -258,17 +259,26 @@ pub struct PdfDownloader {
     cwd: std::path::PathBuf,
 }
 
+
 impl Default for DxDoiDownloader {
     fn default() -> Self {
+        DxDoiDownloader::new(None)
+    }
+}
+
+impl DxDoiDownloader {
+    pub fn new(polite_email : Option<String>) -> Self {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             "Accept",
             reqwest::header::HeaderValue::from_static("application/x-bibtex"),
         );
-        headers.insert(
-            "Mailto",
-            reqwest::header::HeaderValue::from_static("ad.lopez@uw.edu.pl"),
-        );
+        if let Some(email) = polite_email {
+            headers.insert(
+                "Mailto",
+                reqwest::header::HeaderValue::from_str(&email).expect("Could not parse email"),
+            );
+        }
 
         let client = reqwest::Client::builder()
             .user_agent(concat!(
@@ -281,12 +291,7 @@ impl Default for DxDoiDownloader {
             .expect("Could not build http client");
 
         DxDoiDownloader { client }
-    }
-}
 
-impl DxDoiDownloader {
-    pub fn new() -> Self {
-        DxDoiDownloader::default()
     }
 
     async fn download_one<'a>(&self, request: &DownloadRequest<'a>) -> Option<String> {
