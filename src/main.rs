@@ -11,11 +11,11 @@ use std::io::Read;
 
 use colored::Colorize;
 
+use bibadac::arxiv_identifiers::ArxivId;
 use bibadac::bibdb::LocalBibDb;
 use bibadac::bibtex::BibFile;
 use bibadac::format::{write_bibfile, FormatOptions};
-use bibadac::linter::{LintMessage, LinterState, Lint};
-use bibadac::arxiv_identifiers::ArxivId;
+use bibadac::linter::{Lint, LintMessage, LinterState};
 
 use std::collections::HashSet;
 
@@ -60,7 +60,6 @@ enum SubCommand {
     )]
     Setup(SetupArgs),
 }
-
 
 #[derive(Debug, Clone, Args)]
 struct FileArgs {
@@ -149,7 +148,6 @@ struct FormatArgs {
     config: FormatConfig,
 }
 
-
 #[derive(Debug, Clone, Args)]
 struct SetupArgs {
     #[clap(flatten)]
@@ -186,7 +184,9 @@ impl InputFiles for FileArgs {
             })
             .chain(if use_stdin {
                 let mut content = String::new();
-                std::io::stdin().read_to_string(&mut content).expect("Could not read stdin");
+                std::io::stdin()
+                    .read_to_string(&mut content)
+                    .expect("Could not read stdin");
                 vec![InputFile {
                     name: "stdin".into(),
                     content,
@@ -218,7 +218,6 @@ struct JsonReportLint {
     loc: Vec<JsonReportLoc>,
 }
 
-
 fn print_json_lints(lints: Vec<(&InputFile, &BibFile, Vec<Lint>)>) {
     let mut out = std::io::stdout();
     let json_report = lints
@@ -246,7 +245,6 @@ fn print_json_lints(lints: Vec<(&InputFile, &BibFile, Vec<Lint>)>) {
     serde_json::to_writer_pretty(&mut out, &json_report).expect("Could not write json report");
 }
 
-
 fn print_bib_lint(bibtex: &BibFile, bib: &InputFile, l: &Lint) {
     println!(
         "{}\n<{:?}:L{}:C{}>\n{:?}",
@@ -265,9 +263,7 @@ fn print_bib_lint(bibtex: &BibFile, bib: &InputFile, l: &Lint) {
                 s.lines()
                     .take(3)
                     .zip(1..)
-                    .map(|(l, i)| {
-                        format!("{:>4}| {}", i + n.start_position().row, l)
-                    })
+                    .map(|(l, i)| format!("{:>4}| {}", i + n.start_position().row, l))
                     .collect::<Vec<_>>()
                     .join("\n")
             })
@@ -289,7 +285,6 @@ fn print_bib_lint(bibtex: &BibFile, bib: &InputFile, l: &Lint) {
     println!();
 }
 
-
 fn main() {
     let args = Cli::parse();
 
@@ -301,22 +296,29 @@ fn main() {
 
             let mut start_bib = String::new();
             if let Some(path) = cargs.config.file_db {
-                start_bib = std::fs::read_to_string(path).expect("Could not read the helper bibfile");
+                start_bib =
+                    std::fs::read_to_string(path).expect("Could not read the helper bibfile");
             }
 
             let bibtex = BibFile::new(&start_bib);
-            let eprints = bibtex.list_entries()
+            let eprints = bibtex
+                .list_entries()
                 .flat_map(|entry| {
-                    entry.fields.into_iter()
+                    entry
+                        .fields
+                        .into_iter()
                         .filter(|f| bibtex.get_slice(f.name) == "eprint")
-                        .map(|f|  bibtex.get_braceless_slice(f.value))
+                        .map(|f| bibtex.get_braceless_slice(f.value))
                         .filter_map(|e| ArxivId::try_from(e).ok())
-                }).collect::<HashSet<_>>();
+                })
+                .collect::<HashSet<_>>();
             for eprint in eprints {
                 if let Some(v) = eprint.version {
-                    linter.arxiv_latest.entry(eprint.id)
-                                       .and_modify(|u| *u = std::cmp::max(*u,v))
-                                       .or_insert(v);
+                    linter
+                        .arxiv_latest
+                        .entry(eprint.id)
+                        .and_modify(|u| *u = std::cmp::max(*u, v))
+                        .or_insert(v);
                 }
             }
 
@@ -378,7 +380,8 @@ fn main() {
         SubCommand::Format(cargs) => {
             let mut db = LocalBibDb::new();
             if let Some(path) = cargs.config.file_db {
-                let start_bib = std::fs::read_to_string(path).expect("Could not read the helper bibfile");
+                let start_bib =
+                    std::fs::read_to_string(path).expect("Could not read the helper bibfile");
                 db = db.import_bibtex(&start_bib);
             }
 
@@ -398,7 +401,6 @@ fn main() {
             format_options.sort_fields = cargs.config.sort_fields;
             format_options.sort_entries = cargs.config.sort_entries;
 
-
             for bib in inputs {
                 let bibtex = BibFile::new(&bib.content);
                 let max_field_length = bibtex
@@ -417,19 +419,39 @@ fn main() {
                 use std::io::Write;
                 if cargs.config.to_file {
                     let newpath = bib.name.with_extension("new.bib");
-                    let mut out = std::fs::File::create(newpath).expect("Could not create the output file");
-                    write!(out,
-                           "{}",
-                           bibadac::format::BibFormat { bib: &bibtex, options: &format_options }).expect("Could not write to the output file");
+                    let mut out =
+                        std::fs::File::create(newpath).expect("Could not create the output file");
+                    write!(
+                        out,
+                        "{}",
+                        bibadac::format::BibFormat {
+                            bib: &bibtex,
+                            options: &format_options
+                        }
+                    )
+                    .expect("Could not write to the output file");
                 } else if cargs.config.in_place {
-                    let mut out = std::fs::File::create(&bib.name).expect("Could not create the output file");
-                    write!(out,
-                           "{}",
-                           bibadac::format::BibFormat { bib: &bibtex, options: &format_options }).expect("Could not write to the output file");
+                    let mut out =
+                        std::fs::File::create(&bib.name).expect("Could not create the output file");
+                    write!(
+                        out,
+                        "{}",
+                        bibadac::format::BibFormat {
+                            bib: &bibtex,
+                            options: &format_options
+                        }
+                    )
+                    .expect("Could not write to the output file");
                 } else {
-                    write!(std::io::stdout(),
-                           "{}",
-                           bibadac::format::BibFormat { bib: &bibtex, options: &format_options }).expect("Could not write to the output file");
+                    write!(
+                        std::io::stdout(),
+                        "{}",
+                        bibadac::format::BibFormat {
+                            bib: &bibtex,
+                            options: &format_options
+                        }
+                    )
+                    .expect("Could not write to the output file");
                 }
             }
         }
@@ -444,14 +466,15 @@ fn main() {
             if let Some(path) = &cargs.config.working_directory {
                 config.working_directory = path.clone();
             } else {
-                config.working_directory = std::env::current_dir().expect("Could not get the current directory");
+                config.working_directory =
+                    std::env::current_dir().expect("Could not get the current directory");
             }
 
             if let Some(database) = &cargs.config.to_file {
                 config.import_bibfile(database);
             }
 
-            let mut dois:    HashSet<String> = HashSet::new();
+            let mut dois: HashSet<String> = HashSet::new();
             let mut eprints: HashSet<String> = HashSet::new();
             let mut sha256s: HashSet<String> = HashSet::new();
 
@@ -506,18 +529,21 @@ fn main() {
                     // create the file if it does not exist already
                     // otherwise *append* to it
                     let mut file = std::fs::OpenOptions::new()
-                        .create(true)
+                        .write(true)
                         .append(true)
+                        .create(true)
                         .open(path)
                         .expect("Could not open the output file");
                     for (_, result) in response.entries.iter() {
                         if let Some(entry) = result {
-                            writeln!(file, "{}", entry).expect("Could not write to the output file");
+                            writeln!(file, "{}", entry)
+                                .expect("Could not write to the output file");
                         }
                     }
                     for (_, result) in response.pdfs.iter() {
                         if let Some(pdf) = result {
-                            writeln!(file, "{}", pdf.entry).expect("Could not write to the output file");
+                            writeln!(file, "{}", pdf.entry)
+                                .expect("Could not write to the output file");
                         }
                     }
                 }
@@ -534,7 +560,6 @@ fn main() {
                     }
                 }
             });
-
         }
     }
 }
