@@ -130,6 +130,10 @@ struct SetupConfig {
     no_progress: bool,
     #[arg(short = 'm', long, help = "Be polite when talking to CrossRef APIs")]
     polite_email: Option<String>,
+    #[arg(short = 'a', long, help = "Directly import from arxiv")]
+    arxiv: Vec<String>,
+    #[arg(short = 'd', long, help = "Directly import from doi")]
+    doi: Vec<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -502,6 +506,14 @@ fn main() {
                         }
                     }
                 }
+            }
+
+            for arxiv in &cargs.config.arxiv {
+                eprints.insert(arxiv.to_string());
+            }
+
+            for doi in &cargs.config.doi {
+                dois.insert(doi.to_string());
             }
 
             let rt = tokio::runtime::Builder::new_current_thread()
