@@ -528,12 +528,13 @@ fn main() {
                     use std::io::Write;
                     // create the file if it does not exist already
                     // otherwise *append* to it
-                    let mut file = std::fs::OpenOptions::new()
+                    let file = std::fs::OpenOptions::new()
                         .write(true)
                         .append(true)
                         .create(true)
                         .open(path)
                         .expect("Could not open the output file");
+                    let mut file = std::io::BufWriter::new(file);
                     for (_, result) in response.entries.iter() {
                         if let Some(entry) = result {
                             writeln!(file, "{}", entry)
