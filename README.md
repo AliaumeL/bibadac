@@ -38,6 +38,8 @@ been published since*.
   Google Scholar, DBLP, local bibtex files, etc.)
 - [ ] *Downloading* papers from the internet based on the Bibtex entries and
   *pinning them* inside the BibTeX file.
+- [ ] *Merging* several bibtex files together and resolving conflicts : duplicate entries,
+    different versions of the same paper, different entry names for the same document, etc.
 
 Note that all of these actions will take place in the *command line*. The goal
 is not to have a graphical tool that people will use to manage their
