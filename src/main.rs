@@ -118,11 +118,11 @@ struct FormatConfig {
 
 #[derive(Debug, Clone, Args, Default, Serialize, Deserialize)]
 struct SetupConfig {
-    #[arg(short, long, help = "Save bibentries to a file")]
+    #[arg(short = 'o', long, help = "Save bibentries to a file")]
     to_file: Option<std::path::PathBuf>,
-    #[arg(short = 'o', long, help = "Print the bibentries")]
+    #[arg(short = 'b', long, help = "Print the bibentries")]
     no_output: bool,
-    #[arg(short, long, help = "Download the pdfs")]
+    #[arg(short = 't', long, help = "Download the pdfs")]
     documents: bool,
     #[arg(short, long, help = "Directory to save the pdfs")]
     working_directory: Option<std::path::PathBuf>,
