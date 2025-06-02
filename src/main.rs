@@ -172,7 +172,7 @@ trait InputFiles {
 
 impl InputFiles for FileArgs {
     fn list_files(&self) -> Vec<InputFile> {
-        let use_stdin = self.stdin || self.bib.is_empty();
+        let use_stdin = self.stdin;
         self.bib
             .iter()
             .filter_map(|name| {
@@ -290,11 +290,13 @@ fn print_bib_lint(bibtex: &BibFile, bib: &InputFile, l: &Lint) {
 }
 
 fn main() {
-    let args = Cli::parse();
+    let mut args = Cli::parse();
 
     match args.command {
         SubCommand::Check(cargs) => {
             use std::collections::HashSet;
+
+            let mut exit_code = 0;
 
             let mut linter = LinterState::default();
 
@@ -380,6 +382,15 @@ fn main() {
                     print_bib_lint(bibtex, bib, l);
                 }
             }
+            
+            // if we are not outputting JSON, nor having an 
+            // “executive summary” then we probably want to
+            // have the correct exit code.
+            if lints.len() > 0 {
+                exit_code = 1;
+            }
+
+            return exit_code;
         }
         SubCommand::Format(cargs) => {
             let mut db = LocalBibDb::new();
@@ -461,6 +472,7 @@ fn main() {
         }
         SubCommand::Setup(cargs) => {
             use bibadac::setup::SetupConfig;
+
             let files = cargs.files.list_files();
 
             let mut config = SetupConfig::default();
