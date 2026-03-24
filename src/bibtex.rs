@@ -7,10 +7,8 @@ pub use tree_sitter;
 use tree_sitter::{Language, Node, Parser, Tree, TreeCursor};
 use tree_sitter_bibtex as bibparser;
 
-fn language() -> &'static Language {
-    static LANGUAGE: OnceCell<Language> = OnceCell::new();
-    LANGUAGE.get_or_init(|| bibparser::language())
-}
+use crate::bibtex;
+
 
 #[derive(Debug, Clone)]
 pub struct BibFile<'a> {
@@ -98,14 +96,14 @@ impl<'a> BibFile<'a> {
     pub fn new(content: &'a str) -> Self {
         let mut parser = Parser::new();
         parser
-            .set_language(language())
+            .set_language(&bibparser::LANGUAGE.into())
             .expect("Failed to load bibtex language");
         let tree = parser.parse(content, None).unwrap();
         Self { content, tree }
     }
 
-    pub fn iterate(&self) -> impl Iterator<Item = Node> {
-        let root = self.tree.root_node();
+    pub fn iterate(&'a self) -> impl Iterator<Item = Node<'a>> {
+        let root: Node<'a> = self.tree.root_node();
         DFSIterator {
             is_up: false,
             cursor: root.walk(),
@@ -127,7 +125,7 @@ impl<'a> BibFile<'a> {
         }
     }
 
-    pub fn list_entries(&self) -> impl Iterator<Item = BibEntry> {
+    pub fn list_entries(&'a self) -> impl Iterator<Item = BibEntry<'a>> {
         // General shape
         // (document (entry ty: (entry_type) key: (key_brace) field: (field name: (identifier) value: (value (token (brace_word)))) field: (field name: (identifier) value: (value (token (brace_word))))) ...)
         // 1. iterate over entries (entry)

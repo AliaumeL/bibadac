@@ -11,6 +11,8 @@ use std::io::Read;
 
 use colored::Colorize;
 
+use std::process::ExitCode;
+
 use bibadac::arxiv_identifiers::ArxivId;
 use bibadac::bibdb::LocalBibDb;
 use bibadac::bibtex::BibFile;
@@ -289,14 +291,14 @@ fn print_bib_lint(bibtex: &BibFile, bib: &InputFile, l: &Lint) {
     println!();
 }
 
-fn main() {
-    let mut args = Cli::parse();
+fn main() -> ExitCode {
+    let args = Cli::parse();
 
     match args.command {
         SubCommand::Check(cargs) => {
             use std::collections::HashSet;
 
-            let mut exit_code = 0;
+            let mut exit_code = ExitCode::SUCCESS;
 
             let mut linter = LinterState::default();
 
@@ -359,7 +361,7 @@ fn main() {
 
             if cargs.config.to_json {
                 print_json_lints(lints);
-                return;
+                return exit_code;
             }
 
             // 1. print the number of errors for every input
@@ -374,7 +376,7 @@ fn main() {
 
             // 2. do not print the errors for each file if verbose
             if cargs.config.executive_summary {
-                return;
+                return exit_code;
             }
 
             for (bib, bibtex, lints) in lints.iter() {
@@ -387,7 +389,7 @@ fn main() {
             // “executive summary” then we probably want to
             // have the correct exit code.
             if lints.len() > 0 {
-                exit_code = 1;
+                exit_code = ExitCode::FAILURE;
             }
 
             return exit_code;
@@ -586,5 +588,6 @@ fn main() {
                 }
             });
         }
-    }
+    };
+    return ExitCode::SUCCESS;
 }
